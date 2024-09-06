@@ -12,6 +12,14 @@ impl AsRef<Path> for NetworkId<'_> {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub(crate) struct EndpointId<'a>(&'a str);
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub(crate) struct SandboxKey<'a>(&'a str);
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all(deserialize = "PascalCase"))]
 pub(crate) struct CreateNetworkRequest<'a> {
@@ -58,6 +66,67 @@ pub(crate) struct IpamDataV6<'a> {
     pub(crate) gateway: &'a str,
     pub(crate) pool: &'a str,
     pub(crate) aux_addresses: HashMap<&'a str, &'a str>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct CreateEndpointRequest<'a> {
+    #[serde(borrow, rename = "NetworkID")]
+    pub(crate) network_id: NetworkId<'a>,
+    #[serde(borrow, rename = "EndpointID")]
+    pub(crate) endpoint_id: EndpointId<'a>,
+    #[serde(borrow, default)]
+    pub(crate) interface: Interface<'a>,
+    #[serde(default)]
+    pub(crate) options: CreateEndpointOptions,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct Interface<'a> {
+    address: Option<&'a str>,
+    #[serde(rename = "AddressIPv6")]
+    address_ipv6: Option<&'a str>,
+    mac_address: Option<&'a str>,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub(crate) struct CreateEndpointOptions {
+    // Options are ignored altogether for now
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct DeleteEndpointRequest<'a> {
+    #[serde(borrow, rename = "NetworkID")]
+    pub(crate) network_id: NetworkId<'a>,
+    #[serde(borrow, rename = "EndpointID")]
+    pub(crate) endpoint_id: EndpointId<'a>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct DeleteNetworkRequest<'a> {
+    #[serde(borrow, rename = "NetworkID")]
+    pub(crate) network_id: NetworkId<'a>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct JoinRequest<'a> {
+    #[serde(borrow, rename = "NetworkID")]
+    pub(crate) network_id: NetworkId<'a>,
+    #[serde(borrow, rename = "EndpointID")]
+    pub(crate) endpoint_id: EndpointId<'a>,
+    #[serde(borrow, rename = "SandboxID")]
+    pub(crate) sandbox_id: SandboxKey<'a>,
+    #[serde(default)]
+    pub(crate) options: JoinOptions,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub(crate) struct JoinOptions {
+    // Options are ignored altogether for now
 }
 
 #[derive(Serialize, Debug)]

@@ -10,18 +10,30 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::UnixListener;
+use wg::WgError;
 
 mod api;
 mod db;
+mod wg;
 
 struct NetworkPluginService {
     db: Arc<db::Db>,
+    wg: wg::Wg,
+    config_provider: wg::ConfigProvider,
 }
 
 impl NetworkPluginService {
-    fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self, std::io::Error> {
-        let db = Arc::new(db::open(path)?);
-        Ok(Self { db })
+    fn new(
+        db_path: impl AsRef<std::path::Path>,
+        config_provider: wg::ConfigProvider,
+    ) -> Result<Self, std::io::Error> {
+        let db = Arc::new(db::open(db_path)?);
+        let wg = wg::Wg::new().expect("Failed to create WireGuard client");
+        Ok(Self {
+            db,
+            wg,
+            config_provider,
+        })
     }
 
     async fn serve(
@@ -46,23 +58,11 @@ impl NetworkPluginService {
 
             (&Method::POST, "/NetworkDriver.CreateNetwork") => self.create_network(req).await,
 
-            (&Method::POST, "/NetworkDriver.DeleteNetwork") => {
-                let mut not_found = Response::new(empty());
-                *not_found.status_mut() = StatusCode::NOT_IMPLEMENTED;
-                Ok(not_found)
-            }
+            (&Method::POST, "/NetworkDriver.DeleteNetwork") => self.delete_network(req).await,
 
-            (&Method::POST, "/NetworkDriver.CreateEndpoint") => {
-                let mut not_found = Response::new(empty());
-                *not_found.status_mut() = StatusCode::NOT_IMPLEMENTED;
-                Ok(not_found)
-            }
+            (&Method::POST, "/NetworkDriver.CreateEndpoint") => self.create_endpoint(req).await,
 
-            (&Method::POST, "/NetworkDriver.DeleteEndpoint") => {
-                let mut not_found = Response::new(empty());
-                *not_found.status_mut() = StatusCode::NOT_IMPLEMENTED;
-                Ok(not_found)
-            }
+            (&Method::POST, "/NetworkDriver.DeleteEndpoint") => self.delete_endpoint(req).await,
 
             (&Method::POST, "/NetworkDriver.EndpointOperInfo") => {
                 let mut not_found = Response::new(empty());
@@ -70,11 +70,7 @@ impl NetworkPluginService {
                 Ok(not_found)
             }
 
-            (&Method::POST, "/NetworkDriver.Join") => {
-                let mut not_found = Response::new(empty());
-                *not_found.status_mut() = StatusCode::NOT_IMPLEMENTED;
-                Ok(not_found)
-            }
+            (&Method::POST, "/NetworkDriver.Join") => self.join(req).await,
 
             (&Method::POST, "/NetworkDriver.Leave") => {
                 let mut not_found = Response::new(empty());
@@ -129,6 +125,67 @@ impl NetworkPluginService {
         .await??;
         Ok(Response::new(full("{}")))
     }
+
+    async fn delete_network(
+        &self,
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
+        let body_bytes = req.collect().await?.to_bytes();
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || {
+            let req_body: api::DeleteNetworkRequest =
+                serde_json::from_slice(&body_bytes).map_err(Error::from)?;
+
+            let network_id = req_body.network_id;
+
+            db.delete_network(network_id).map_err(Error::from)
+        })
+        .await??;
+        Ok(Response::new(full("{}")))
+    }
+
+    async fn create_endpoint(
+        &self,
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
+        let body_bytes = req.collect().await?.to_bytes();
+        if let Ok(s) = std::str::from_utf8(&body_bytes) {
+            eprintln!("wireguard-docker-plugin: {}", s);
+        }
+        Ok(Response::new(full(r#"{"interface":{}}"#)))
+    }
+
+    async fn delete_endpoint(
+        &self,
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
+        let body_bytes = req.collect().await?.to_bytes();
+        if let Ok(s) = std::str::from_utf8(&body_bytes) {
+            eprintln!("wireguard-docker-plugin: {}", s);
+        }
+        Ok(Response::new(full("{}")))
+    }
+
+    async fn join(
+        &self,
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
+        let body_bytes = req.collect().await?.to_bytes();
+        if let Ok(s) = std::str::from_utf8(&body_bytes) {
+            eprintln!("wireguard-docker-plugin: {}", s);
+        }
+        let db = self.db.clone();
+        let network = tokio::task::spawn_blocking(move || -> Result<_, Error> {
+            let req_body: api::JoinRequest =
+                serde_json::from_slice(&body_bytes).map_err(Error::from)?;
+            db.get_network(req_body.network_id).map_err(Error::from)
+        })
+        .await??;
+        let config_name = network.config();
+        let config = self.config_provider.get_config(config_name).await?;
+        self.wg.create_interface(config_name, config).await?;
+        Ok(Response::new(full(r#"{"interface":{}}"#)))
+    }
 }
 
 fn empty() -> BoxBody<Bytes, hyper::Error> {
@@ -147,6 +204,7 @@ enum Error {
     Hyper(hyper::Error),
     SerdeJson(serde_json::Error),
     Io(std::io::Error),
+    Wg(WgError),
     MissingConfig(Vec<&'static str>),
     Abort,
 }
@@ -175,6 +233,12 @@ impl From<tokio::task::JoinError> for Error {
     }
 }
 
+impl From<WgError> for Error {
+    fn from(e: WgError) -> Self {
+        Error::Wg(e)
+    }
+}
+
 fn ok_or_error_response(
     result: Result<Response<BoxBody<Bytes, hyper::Error>>, Error>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
@@ -192,6 +256,10 @@ fn ok_or_error_response(
         Err(Error::MissingConfig(fields)) => {
             let message = format!("Missing configuration options: {}", &fields.join(", "));
             error_response(&message, StatusCode::BAD_REQUEST)
+        }
+        Err(Error::Wg(e)) => {
+            let message = format!("error while configuring wireguard interface: {e}");
+            error_response(&message, StatusCode::INTERNAL_SERVER_ERROR)
         }
         Err(Error::Abort) => error_response("aborted", StatusCode::INTERNAL_SERVER_ERROR),
     })
@@ -249,8 +317,10 @@ async fn server(
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket_path = "/run/docker/plugins/wireguard.sock";
     let db_path = "wireguard_db";
+    let conf_path = "wireguard_conf";
+    let config_provider = wg::ConfigProvider::new_file(conf_path.into());
 
-    let service = Arc::new(NetworkPluginService::new(db_path)?);
+    let service = Arc::new(NetworkPluginService::new(db_path, config_provider)?);
 
     server(socket_path, service).await?;
 
