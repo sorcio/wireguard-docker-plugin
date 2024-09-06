@@ -9,6 +9,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use serde_json::json;
 use tokio::net::UnixListener;
 use wg::WgError;
 
@@ -65,9 +66,7 @@ impl NetworkPluginService {
             (&Method::POST, "/NetworkDriver.DeleteEndpoint") => self.delete_endpoint(req).await,
 
             (&Method::POST, "/NetworkDriver.EndpointOperInfo") => {
-                let mut not_found = Response::new(empty());
-                *not_found.status_mut() = StatusCode::NOT_IMPLEMENTED;
-                Ok(not_found)
+                Ok(Response::new(full(r#"{"Value": {}}"#)))
             }
 
             (&Method::POST, "/NetworkDriver.Join") => self.join(req).await,
@@ -152,7 +151,31 @@ impl NetworkPluginService {
         if let Ok(s) = std::str::from_utf8(&body_bytes) {
             eprintln!("wireguard-docker-plugin: {}", s);
         }
-        Ok(Response::new(full(r#"{"interface":{}}"#)))
+        let db = self.db.clone();
+        let network = tokio::task::spawn_blocking(move || {
+            let req_body: api::CreateEndpointRequest =
+                serde_json::from_slice(&body_bytes).map_err(Error::from)?;
+            db.get_network(req_body.network_id).map_err(Error::from)
+        })
+        .await??;
+        let config_name = network.config();
+        let config = self.config_provider.get_config(config_name).await?;
+        if let Some(address) = config.address() {
+            let (address, address_ipv6) = match address.ip() {
+                std::net::IpAddr::V4(_) => (Some(address.to_string()), None),
+                std::net::IpAddr::V6(_) => (None, Some(address.to_string())),
+            };
+            let response_json = json!({
+                "Interface": {
+                    "Address": address,
+                    "AddressIPv6": address_ipv6,
+                    "MacAddress": null,
+                }
+            });
+            Ok(Response::new(full(response_json.to_string())))
+        } else {
+            Ok(Response::new(full(r#"{"Interface":{}}"#)))
+        }
     }
 
     async fn delete_endpoint(
@@ -175,16 +198,41 @@ impl NetworkPluginService {
             eprintln!("wireguard-docker-plugin: {}", s);
         }
         let db = self.db.clone();
-        let network = tokio::task::spawn_blocking(move || -> Result<_, Error> {
+        let (network, endpoint_id) = tokio::task::spawn_blocking(move || -> Result<_, Error> {
             let req_body: api::JoinRequest =
                 serde_json::from_slice(&body_bytes).map_err(Error::from)?;
-            db.get_network(req_body.network_id).map_err(Error::from)
+            Ok((
+                db.get_network(req_body.network_id).map_err(Error::from)?,
+                req_body.endpoint_id.to_string(),
+            ))
         })
         .await??;
         let config_name = network.config();
         let config = self.config_provider.get_config(config_name).await?;
-        self.wg.create_interface(config_name, config).await?;
-        Ok(Response::new(full(r#"{"interface":{}}"#)))
+        let if_name_suffix = &endpoint_id[0..8];
+        let if_name = self
+            .wg
+            .create_interface(if_name_suffix, config.clone())
+            .await?;
+        let static_routes: Vec<_> = config
+            .routes()
+            .map(|route| {
+                json!({
+                    "Destination": route.to_string(),
+                    "RouteType": 1,
+                })
+            })
+            .collect();
+        let response_json = json!({
+            "InterfaceName": {
+                "SrcName": if_name,
+                "DstPrefix": "wg",
+            },
+            "StaticRoutes": static_routes,
+            "DisableGatewayService": true,
+        });
+        dbg!(&response_json);
+        Ok(Response::new(full(response_json.to_string())))
     }
 }
 

@@ -31,27 +31,41 @@ impl std::str::FromStr for Key {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct Config {
     pub(super) private_key: Key,
     pub(super) listen_port: Option<u16>,
     pub(super) fw_mark: Option<u32>,
+    pub(super) address: Option<CidrAddress>,
     pub(super) peers: Vec<Peer>,
 }
 
+impl Config {
+    pub(crate) fn address(&self) -> Option<&CidrAddress> {
+        self.address.as_ref()
+    }
+
+    pub(crate) fn routes(&self) -> impl Iterator<Item = &CidrAddress> {
+        self.peers.iter().flat_map(|peer| peer.allowed_ips.iter())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct Peer {
     pub(super) public_key: Key,
     pub(super) preshared_key: Option<Key>,
     pub(super) endpoint: Option<SocketAddr>,
-    pub(super) allowed_ips: Vec<AllowedIp>,
+    pub(super) allowed_ips: Vec<CidrAddress>,
     pub(super) persistent_keepalive: Option<NonZeroU16>,
 }
 
-pub(crate) struct AllowedIp {
+#[derive(Debug, Clone)]
+pub(crate) struct CidrAddress {
     ip: std::net::IpAddr,
     cidr: u8,
 }
 
-impl AllowedIp {
+impl CidrAddress {
     pub(crate) fn ip(&self) -> &std::net::IpAddr {
         &self.ip
     }
@@ -61,7 +75,13 @@ impl AllowedIp {
     }
 }
 
-impl std::str::FromStr for AllowedIp {
+impl std::fmt::Display for CidrAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.ip, self.cidr)
+    }
+}
+
+impl std::str::FromStr for CidrAddress {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -104,6 +124,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
     let mut private_key = None;
     let mut listen_port = None;
     let mut fw_mark = None;
+    let mut address = None;
     let mut peers = Vec::new();
     let mut public_key = None;
     let mut preshared_key = None;
@@ -188,6 +209,14 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                     })?;
                     fw_mark = Some(mark);
                 }
+                (Section::Interface, "Address") => {
+                    let addr: CidrAddress = value.parse().map_err(|_| {
+                        WgErrorInner::ConfigParse(format!(
+                            "line {line}: Address should be a valid address/cidr string"
+                        ))
+                    })?;
+                    address = Some(addr);
+                }
                 (Section::Peer, "PublicKey") => {
                     let key: Key = value.parse().map_err(|_| {
                         WgErrorInner::ConfigParse(format!(
@@ -257,6 +286,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
             .ok_or_else(|| WgErrorInner::ConfigParse("PrivateKey is required".to_string()))?,
         listen_port,
         fw_mark,
+        address,
         peers,
     })
 }

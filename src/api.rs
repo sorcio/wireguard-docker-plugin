@@ -16,6 +16,12 @@ impl AsRef<Path> for NetworkId<'_> {
 #[serde(transparent)]
 pub(crate) struct EndpointId<'a>(&'a str);
 
+impl std::fmt::Display for EndpointId<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub(crate) struct SandboxKey<'a>(&'a str);
@@ -118,8 +124,8 @@ pub(crate) struct JoinRequest<'a> {
     pub(crate) network_id: NetworkId<'a>,
     #[serde(borrow, rename = "EndpointID")]
     pub(crate) endpoint_id: EndpointId<'a>,
-    #[serde(borrow, rename = "SandboxID")]
-    pub(crate) sandbox_id: SandboxKey<'a>,
+    #[serde(borrow)]
+    pub(crate) sandbox_key: SandboxKey<'a>,
     #[serde(default)]
     pub(crate) options: JoinOptions,
 }

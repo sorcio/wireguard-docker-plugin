@@ -42,7 +42,11 @@ impl Wg {
         })
     }
 
-    pub(crate) async fn create_interface(&self, name: &str, config: Config) -> Result<(), WgError> {
+    pub(crate) async fn create_interface(
+        &self,
+        name: &str,
+        config: Config,
+    ) -> Result<String, WgError> {
         let if_name = format!("wg-docker-{name}");
         self.rt
             .link()
@@ -54,6 +58,7 @@ impl Wg {
 
         {
             let wg_socket = self.wg_socket.clone();
+            let if_name = if_name.clone();
             tokio::task::spawn_blocking(move || {
                 let mut wg_socket = wg_socket.lock().unwrap();
                 let uapi_device = config_to_uapi_device(&if_name, &config);
@@ -63,7 +68,7 @@ impl Wg {
             .map_err(WgErrorInner::from)?
             .map_err(WgErrorInner::from)?;
         }
-        Ok(())
+        Ok(if_name)
     }
 }
 
