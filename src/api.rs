@@ -112,6 +112,15 @@ pub(crate) struct DeleteEndpointRequest<'a> {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct LeaveRequest<'a> {
+    #[serde(borrow, rename = "NetworkID")]
+    pub(crate) network_id: NetworkId<'a>,
+    #[serde(borrow, rename = "EndpointID")]
+    pub(crate) endpoint_id: EndpointId<'a>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
 pub(crate) struct DeleteNetworkRequest<'a> {
     #[serde(borrow, rename = "NetworkID")]
     pub(crate) network_id: NetworkId<'a>,

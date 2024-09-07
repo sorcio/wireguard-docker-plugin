@@ -466,11 +466,12 @@ dependencies = [
 
 [[package]]
 name = "netlink-packet-route"
-version = "0.19.0"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74c171cd77b4ee8c7708da746ce392440cb7bcf618d122ec9ecc607b12938bf4"
+checksum = "55e5bda7ca0f9ac5e75b5debac3b75e29a8ac8e2171106a2c3bb466389a8dd83"
 dependencies = [
  "anyhow",
+ "bitflags",
  "byteorder",
  "libc",
  "log",
@@ -609,8 +610,7 @@ dependencies = [
 [[package]]
 name = "rtnetlink"
 version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b684475344d8df1859ddb2d395dd3dac4f8f3422a1aa0725993cb375fc5caba5"
+source = "git+https://github.com/rust-netlink/rtnetlink?rev=5fca904b11ba2535fdfac30bf729aa8c10c34c0d#5fca904b11ba2535fdfac30bf729aa8c10c34c0d"
 dependencies = [
  "futures",
  "log",
@@ -895,10 +895,12 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bytes",
+ "futures-util",
  "http-body-util",
  "hyper",
  "hyper-util",
  "ini_core",
+ "log",
  "pin-project-lite",
  "rtnetlink",
  "rustix",

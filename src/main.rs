@@ -71,11 +71,7 @@ impl NetworkPluginService {
 
             (&Method::POST, "/NetworkDriver.Join") => self.join(req).await,
 
-            (&Method::POST, "/NetworkDriver.Leave") => {
-                let mut not_found = Response::new(empty());
-                *not_found.status_mut() = StatusCode::NOT_IMPLEMENTED;
-                Ok(not_found)
-            }
+            (&Method::POST, "/NetworkDriver.Leave") => self.leave(req).await,
 
             (&Method::POST, "/NetworkDriver.DiscoverNew") => {
                 let mut not_found = Response::new(empty());
@@ -198,21 +194,19 @@ impl NetworkPluginService {
             eprintln!("wireguard-docker-plugin: {}", s);
         }
         let db = self.db.clone();
-        let (network, endpoint_id) = tokio::task::spawn_blocking(move || -> Result<_, Error> {
+        let (network, endpoint_id) = tokio::task::block_in_place(|| -> Result<_, Error> {
             let req_body: api::JoinRequest =
                 serde_json::from_slice(&body_bytes).map_err(Error::from)?;
             Ok((
                 db.get_network(req_body.network_id).map_err(Error::from)?,
-                req_body.endpoint_id.to_string(),
+                req_body.endpoint_id,
             ))
-        })
-        .await??;
+        })?;
         let config_name = network.config();
         let config = self.config_provider.get_config(config_name).await?;
-        let if_name_suffix = &endpoint_id[0..8];
         let if_name = self
             .wg
-            .create_interface(if_name_suffix, config.clone())
+            .create_interface(endpoint_id, config.clone())
             .await?;
         let static_routes: Vec<_> = config
             .routes()
@@ -233,6 +227,23 @@ impl NetworkPluginService {
         });
         dbg!(&response_json);
         Ok(Response::new(full(response_json.to_string())))
+    }
+
+    async fn leave(
+        &self,
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
+        let body_bytes = req.collect().await?.to_bytes();
+        if let Ok(s) = std::str::from_utf8(&body_bytes) {
+            eprintln!("wireguard-docker-plugin: {}", s);
+        }
+        let endpoint_id = tokio::task::block_in_place(|| -> Result<_, Error> {
+            let req_body: api::LeaveRequest =
+                serde_json::from_slice(&body_bytes).map_err(Error::from)?;
+            Ok(req_body.endpoint_id)
+        })?;
+        self.wg.delete_interface(endpoint_id).await;
+        Ok(Response::new(full("{}")))
     }
 }
 

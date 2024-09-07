@@ -14,7 +14,10 @@ serde_json = "1.0"
 hyper-util = { version = "0.1.7", features = ["http1", "server", "tokio"] }
 rustix = { version = "0.38.35", features = ["fs"] }
 thiserror = "1.0.63"
-rtnetlink = "0.14.1"
+rtnetlink = { git = "https://github.com/rust-netlink/rtnetlink", rev = "5fca904b11ba2535fdfac30bf729aa8c10c34c0d", version = "0.14.1" }
 wireguard-uapi = "3.0.0"
 ini_core = "0.2.0"
 base64 = { version = "0.22.1", default-features = false }
+# netlink-proto = { version = "0.11.3", features = ["tokio_socket"] }
+futures-util = { version = "0.3.30", default-features = false }
+log = "0.4.22"
