@@ -336,10 +336,17 @@ fn error_response(
 }
 
 async fn shutdown_signal() {
-    // Wait for the CTRL+C signal
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install CTRL+C signal handler");
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut sigterm = signal(SignalKind::terminate()).unwrap();
+    let mut sigint = signal(SignalKind::interrupt()).unwrap();
+    tokio::select! {
+        _ = sigterm.recv() => {
+            log::info!("Received SIGTERM");
+        }
+        _ = sigint.recv() => {
+            log::info!("Received SIGINT");
+        }
+    };
 }
 
 async fn server(
