@@ -9,6 +9,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use log::log_enabled;
 use serde_json::json;
 use tokio::net::UnixListener;
 use wg::WgError;
@@ -41,10 +42,10 @@ impl NetworkPluginService {
         self: Arc<Self>,
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-        eprintln!(
-            "wireguard-docker-plugin: {} {}",
-            req.method(),
-            req.uri().path()
+        log::debug!(
+            method = req.method().as_str(),
+            path = req.uri().path();
+            "Received request"
         );
         ok_or_error_response(match (req.method(), req.uri().path()) {
             (&Method::GET, "/") => Ok(Response::new(full("Ready."))),
@@ -144,8 +145,10 @@ impl NetworkPluginService {
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
         let body_bytes = req.collect().await?.to_bytes();
-        if let Ok(s) = std::str::from_utf8(&body_bytes) {
-            eprintln!("wireguard-docker-plugin: {}", s);
+        if log_enabled!(log::Level::Trace) {
+            if let Ok(s) = std::str::from_utf8(&body_bytes) {
+                log::trace!(body = s; "create endpoint request");
+            }
         }
         let db = self.db.clone();
         let (_req_body, network) = tokio::task::block_in_place(|| -> Result<_, Error> {
@@ -179,8 +182,10 @@ impl NetworkPluginService {
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
         let body_bytes = req.collect().await?.to_bytes();
-        if let Ok(s) = std::str::from_utf8(&body_bytes) {
-            eprintln!("wireguard-docker-plugin: {}", s);
+        if log_enabled!(log::Level::Trace) {
+            if let Ok(s) = std::str::from_utf8(&body_bytes) {
+                log::trace!(body = s; "delete endpoint request");
+            }
         }
         Ok(Response::new(full("{}")))
     }
@@ -190,8 +195,10 @@ impl NetworkPluginService {
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
         let body_bytes = req.collect().await?.to_bytes();
-        if let Ok(s) = std::str::from_utf8(&body_bytes) {
-            eprintln!("wireguard-docker-plugin: {}", s);
+        if log_enabled!(log::Level::Trace) {
+            if let Ok(s) = std::str::from_utf8(&body_bytes) {
+                log::trace!(body = s; "join request");
+            }
         }
         let db = self.db.clone();
         let (network, endpoint_id) = tokio::task::block_in_place(|| -> Result<_, Error> {
@@ -234,8 +241,10 @@ impl NetworkPluginService {
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
         let body_bytes = req.collect().await?.to_bytes();
-        if let Ok(s) = std::str::from_utf8(&body_bytes) {
-            eprintln!("wireguard-docker-plugin: {}", s);
+        if log_enabled!(log::Level::Trace) {
+            if let Ok(s) = std::str::from_utf8(&body_bytes) {
+                log::trace!(body = s; "leave request");
+            }
         }
         let endpoint_id = tokio::task::block_in_place(|| -> Result<_, Error> {
             let req_body: api::LeaveRequest =
@@ -354,7 +363,7 @@ async fn server(
     service: Arc<NetworkPluginService>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = UnixListener::bind(path)?;
-    println!("Listening on {path}");
+    log::info!("Listening on {path}");
     let mut shutdown = std::pin::pin!(shutdown_signal());
 
     loop {
@@ -367,12 +376,12 @@ async fn server(
                         .serve_connection(io, service_fn(move |req| service_ref.clone().serve(req)))
                         .await
                     {
-                        println!("Error serving connection: {:?}", err);
+                        log::error!("Error serving connection: {:?}", err);
                     }
                 });
             }
             _ = &mut shutdown => {
-                println!("Shutting down...");
+                log::info!("Shutting down...");
                 break Ok(());
             }
         }
@@ -391,7 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     server(socket_path, service).await?;
 
     if std::fs::remove_file(socket_path).is_ok() {
-        println!("Removed socket file");
+        log::info!("Removed socket file");
     }
 
     Ok(())

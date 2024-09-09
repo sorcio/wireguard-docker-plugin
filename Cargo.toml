@@ -21,4 +21,4 @@ ini_core = "0.2.0"
 base64 = { version = "0.22.1", default-features = false }
 # netlink-proto = { version = "0.11.3", features = ["tokio_socket"] }
 futures-util = { version = "0.3.30", default-features = false }
-log = "0.4.22"
+log = { version = "0.4.22", features = ["kv", "release_max_level_info"] }
