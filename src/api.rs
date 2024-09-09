@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub(crate) struct NetworkId<'a>(&'a str);
 
@@ -12,7 +12,7 @@ impl AsRef<Path> for NetworkId<'_> {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub(crate) struct EndpointId<'a>(&'a str);
 
@@ -31,10 +31,10 @@ pub(crate) struct SandboxKey<'a>(&'a str);
 pub(crate) struct CreateNetworkRequest<'a> {
     #[serde(borrow, rename = "NetworkID")]
     pub(crate) network_id: NetworkId<'a>,
-    #[serde(default, rename = "IPv4Data")]
-    pub(crate) ipv4_data: Vec<IpamDataV4<'a>>,
-    #[serde(default, rename = "IPv6Data")]
-    pub(crate) ipv6_data: Vec<IpamDataV6<'a>>,
+    // #[serde(default, rename = "IPv4Data")]
+    // pub(crate) ipv4_data: Vec<IpamDataV4<'a>>,
+    // #[serde(default, rename = "IPv6Data")]
+    // pub(crate) ipv6_data: Vec<IpamDataV6<'a>>,
     #[serde(default, borrow)]
     pub(crate) options: CreateNetworkOptions<'a>,
 }
@@ -177,8 +177,8 @@ mod tests {
             req.network_id,
             NetworkId("ec22489c52c934f9f788cc99483deb35070eae17b7712e12e569f8a39e0b9a4b")
         );
-        assert_eq!(req.ipv4_data.len(), 1);
-        assert_eq!(req.ipv6_data.len(), 0);
+        // assert_eq!(req.ipv4_data.len(), 1);
+        // assert_eq!(req.ipv6_data.len(), 0);
         assert_eq!(req.options.enable_ipv6, Some(false));
         assert_eq!(req.options.generic.config, Some("foo-bar"));
     }

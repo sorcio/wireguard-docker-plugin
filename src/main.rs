@@ -148,12 +148,12 @@ impl NetworkPluginService {
             eprintln!("wireguard-docker-plugin: {}", s);
         }
         let db = self.db.clone();
-        let network = tokio::task::spawn_blocking(move || {
+        let (_req_body, network) = tokio::task::block_in_place(|| -> Result<_, Error> {
             let req_body: api::CreateEndpointRequest =
                 serde_json::from_slice(&body_bytes).map_err(Error::from)?;
-            db.get_network(req_body.network_id).map_err(Error::from)
-        })
-        .await??;
+            let network = db.get_network(req_body.network_id).map_err(Error::from)?;
+            Ok((req_body, network))
+        })?;
         let config_name = network.config();
         let config = self.config_provider.get_config(config_name).await?;
         if let Some(address) = config.address() {
