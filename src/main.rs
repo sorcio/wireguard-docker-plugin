@@ -232,7 +232,7 @@ impl NetworkPluginService {
             "StaticRoutes": static_routes,
             "DisableGatewayService": true,
         });
-        dbg!(&response_json);
+        log::trace!(response_json:?; "response");
         Ok(Response::new(full(response_json.to_string())))
     }
 
@@ -363,7 +363,7 @@ async fn server(
     service: Arc<NetworkPluginService>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = UnixListener::bind(path)?;
-    log::info!("Listening on {path}");
+    log::info!(path; "Listening on socket");
     let mut shutdown = std::pin::pin!(shutdown_signal());
 
     loop {
