@@ -16,6 +16,7 @@ use wg::WgError;
 
 mod api;
 mod db;
+mod logging;
 mod wg;
 
 struct NetworkPluginService {
@@ -390,6 +391,7 @@ async fn server(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    logging::configure_logging();
     let socket_path = "/run/docker/plugins/wireguard.sock";
     let db_path = "wireguard_db";
     let conf_path = "wireguard_conf";
