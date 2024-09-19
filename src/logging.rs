@@ -1,14 +1,20 @@
-struct Logger {
+use std::io::Write;
+
+struct Logger<Writer> {
     max_level: log::LevelFilter,
+    output: Writer,
 }
 
-impl Logger {
+impl Logger<()> {
     const fn new() -> Self {
         Self {
             max_level: log::LevelFilter::Off,
+            output: (),
         }
     }
+}
 
+impl<T> Logger<T> {
     fn level(mut self, max_level: log::LevelFilter) -> Self {
         log::set_max_level(max_level);
         self.max_level = max_level;
@@ -29,13 +35,32 @@ impl Logger {
         self
     }
 
+    fn output<W>(self, writer: W) -> Logger<W> {
+        Logger {
+            max_level: self.max_level,
+            output: writer,
+        }
+    }
+}
+
+impl<T> Logger<T>
+where
+    T: Send + Sync + 'static,
+    for<'a> &'a T: Write,
+{
     fn init(self) -> Result<(), log::SetLoggerError> {
         log::set_max_level(self.max_level);
         log::set_boxed_logger(Box::new(self))
     }
 }
 
-impl log::Log for Logger {
+const FAILED_WRITE_MSG: &str = "failed to write to log output";
+
+impl<T> log::Log for Logger<T>
+where
+    T: Send + Sync + 'static,
+    for<'a> &'a T: Write,
+{
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= self.max_level && metadata.target().starts_with(module_path!())
     }
@@ -45,26 +70,28 @@ impl log::Log for Logger {
             return;
         }
         let timestamp = humantime::format_rfc3339_millis(std::time::SystemTime::now());
-        struct Printer;
+        struct Printer<T>(T);
         use log::kv;
-        impl<'kvs> kv::VisitSource<'kvs> for Printer {
+        impl<'kvs, T: Write> kv::VisitSource<'kvs> for Printer<T> {
             fn visit_pair(
                 &mut self,
                 key: kv::Key<'kvs>,
                 value: kv::Value<'kvs>,
             ) -> Result<(), kv::Error> {
-                eprint!(" {key}={value}");
+                write!(self.0, " {key}={value}").expect(FAILED_WRITE_MSG);
                 Ok(())
             }
         }
-        eprint!(
+        write!(
+            &self.output,
             "{timestamp} {level} {args}",
             timestamp = timestamp,
             level = record.level(),
             args = record.args(),
-        );
-        let _ = record.key_values().visit(&mut Printer);
-        eprintln!();
+        )
+        .expect(FAILED_WRITE_MSG);
+        let _ = record.key_values().visit(&mut Printer(&self.output));
+        (&self.output).write_all(b"\n").expect(FAILED_WRITE_MSG);
     }
 
     fn flush(&self) {
@@ -72,9 +99,11 @@ impl log::Log for Logger {
     }
 }
 
-pub(crate) fn configure_logging() {
-    // TODO: fix this when we have a proper argument parser
-    let verbose = std::env::args().find(|i| i == "-v").is_some();
+pub(crate) fn configure_logging() -> Result<(), ()> {
+    let verbose = std::env::var("DEBUG")
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false);
+
     let base_verbosity = if cfg!(debug_assertions) {
         log::Level::Debug
     } else {
@@ -84,5 +113,28 @@ pub(crate) fn configure_logging() {
     if verbose {
         logger = logger.increase_level();
     }
-    let _ = logger.init();
+
+    match std::env::var_os("LOGFILE") {
+        Some(path) => {
+            if path == "stderr" {
+                logger.output(std::io::stderr()).init().map_err(|_| ())
+            } else if path == "stdout" {
+                logger.output(std::io::stdout()).init().map_err(|_| ())
+            } else {
+                let file = match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    Ok(file) => file,
+                    Err(e) => {
+                        eprintln!("Failed to open log file: {}", e);
+                        return Err(());
+                    }
+                };
+                logger.output(file).init().map_err(|_| ())
+            }
+        }
+        None => logger.output(std::io::stderr()).init().map_err(|_| ()),
+    }
 }

@@ -1,5 +1,6 @@
 // #![deny(warnings)]
 
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use api::ErrorResponse;
@@ -17,6 +18,7 @@ use wg::WgError;
 mod api;
 mod db;
 mod logging;
+mod netns;
 mod wg;
 
 struct NetworkPluginService {
@@ -389,9 +391,30 @@ async fn server(
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    logging::configure_logging();
+fn main() -> ExitCode {
+    if logging::configure_logging().is_err() {
+        return ExitCode::FAILURE;
+    }
+    let netns_options = netns::NetworkNamespaceOptions::from_env();
+    if netns::enter_net_namespace(&netns_options).is_err() {
+        return ExitCode::FAILURE;
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_io()
+        .worker_threads(1)
+        .thread_name("worker")
+        .build()
+        .unwrap();
+    match rt.block_on(async_main()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            log::error!("Error: {:?}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket_path = "/run/docker/plugins/wireguard.sock";
     let db_path = "wireguard_db";
     let conf_path = "wireguard_conf";
