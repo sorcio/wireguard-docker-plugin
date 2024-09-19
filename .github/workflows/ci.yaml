@@ -30,3 +30,4 @@ jobs:
       - run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
       - run: cargo build --verbose --target ${{ matrix.target }}
       - run: cargo test --verbose --target ${{ matrix.target }}
+        if: (startsWith(matrix.target, 'x86_64-') && runner.arch == 'X64') || (startsWith(matrix.target, 'aarch64-') && runner.arch == 'ARM64')
