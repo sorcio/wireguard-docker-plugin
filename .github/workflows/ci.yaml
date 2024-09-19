@@ -1,0 +1,34 @@
+name: Cargo Build & Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  merge_group:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-gnu-gcc
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+
+jobs:
+  build_and_test:
+    name: Rust project - latest
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain:
+          - stable
+          - beta
+          - nightly
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }} && rustup target add ${{ matrix.target }}
+      - run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
+      - run: cargo build --verbose --target ${{ matrix.target }}
+      - run: cargo test --verbose --target ${{ matrix.target }}
+        if: (startsWith(matrix.target, 'x86_64-') && runner.arch == 'X64') || (startsWith(matrix.target, 'aarch64-') && runner.arch == 'ARM64')
