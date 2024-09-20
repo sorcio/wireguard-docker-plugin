@@ -1,5 +1,3 @@
-// #![deny(warnings)]
-
 use std::process::ExitCode;
 use std::sync::Arc;
 
