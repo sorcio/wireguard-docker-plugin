@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, num::NonZeroU16, path::PathBuf};
 
+use crate::types::ConfigName;
+
 use super::{WgError, WgErrorInner};
 
 #[derive(Debug, Clone)]
@@ -302,7 +304,7 @@ impl ConfigProvider {
         }
     }
 
-    pub async fn get_config(&self, name: &str) -> Result<Config, WgError> {
+    pub async fn get_config(&self, name: &ConfigName) -> Result<Config, WgError> {
         match &self.inner {
             ConfigProviderInner::File { base_path } => {
                 let path = base_path.join(name).with_extension("conf");
