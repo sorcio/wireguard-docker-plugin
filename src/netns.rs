@@ -1,5 +1,3 @@
-#![cfg(target_os = "linux")]
-
 use std::path::{Path, PathBuf};
 
 const DEFAULT_NETNS_PATH: &str = "/parent-netns";
