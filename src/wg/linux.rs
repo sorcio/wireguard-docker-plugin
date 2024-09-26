@@ -15,7 +15,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use wireguard_uapi::WgSocket;
 
-use crate::api::EndpointId;
+use crate::types::EndpointId;
 
 use super::{Config, WgError};
 
@@ -58,7 +58,7 @@ impl Wg {
 
     pub(crate) async fn create_interface(
         &self,
-        endpoint_id: EndpointId<'_>,
+        endpoint_id: &EndpointId,
         config: Config,
     ) -> Result<String, WgError> {
         let if_name = Self::interface_name(endpoint_id);
@@ -84,7 +84,7 @@ impl Wg {
         Ok(if_name)
     }
 
-    pub(crate) async fn delete_interface(&self, endpoint_id: EndpointId<'_>) {
+    pub(crate) async fn delete_interface(&self, endpoint_id: &EndpointId) {
         let name = Self::interface_name(endpoint_id);
         if !delete_link_if_found(self.rt.clone(), name.clone())
             .await
@@ -94,8 +94,8 @@ impl Wg {
         }
     }
 
-    fn interface_name(endpoint_id: EndpointId<'_>) -> String {
-        let suffix = &endpoint_id.to_string()[0..8];
+    fn interface_name(endpoint_id: &EndpointId) -> String {
+        let suffix = &endpoint_id.as_str()[0..8];
         format!("wgdkr{suffix}")
     }
 }
