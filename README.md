@@ -56,6 +56,9 @@ Note that the WireGuard connection will use host networking, so the
 On the other hand, the `Address` and `AllowedIPs` lines will apply to
 the container.
 
+Valid configuration file names end with `.conf`, only contain alphanumeric
+characters, hyphens, and underscores, and start with an alphanumeric character.
+
 ### Creating a network
 
 To create a network, you need to specify the name of the network and the
