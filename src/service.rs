@@ -81,32 +81,38 @@ impl NetworkPluginService {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct CreateNetworkOptions<'a> {
     pub(crate) network_id: &'a NetworkId,
     pub(crate) config_name: &'a ConfigName,
 }
 
+#[derive(Debug)]
 pub(crate) struct DeleteNetworkOptions<'a> {
     pub(crate) network_id: &'a NetworkId,
 }
 
+#[derive(Debug)]
 pub(crate) struct CreateEndpointOptions<'a> {
     pub(crate) network_id: &'a NetworkId,
     #[expect(unused)]
     pub(crate) endpoint_id: &'a EndpointId,
 }
 
+#[derive(Debug)]
 pub(crate) struct JoinOptions<'a> {
     pub(crate) network_id: &'a NetworkId,
     pub(crate) endpoint_id: &'a EndpointId,
 }
 
+#[derive(Debug)]
 pub(crate) struct LeaveOptions<'a> {
     #[expect(unused)]
     pub(crate) network_id: &'a NetworkId,
     pub(crate) endpoint_id: &'a EndpointId,
 }
 
+#[derive(Debug)]
 pub(crate) struct CreatedInterface {
     pub(crate) if_name: String,
     pub(crate) routes: Vec<CidrAddress>,

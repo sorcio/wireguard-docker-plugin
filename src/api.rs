@@ -240,5 +240,31 @@ mod tests {
             req.options.generic.config.map(ConfigName::as_str),
             Some("foo-bar")
         );
+        let options = req.validate().unwrap();
+        assert_eq!(
+            options.network_id.as_str(),
+            "ec22489c52c934f9f788cc99483deb35070eae17b7712e12e569f8a39e0b9a4b"
+        );
+        assert_eq!(options.config_name.as_str(), "foo-bar");
+    }
+
+    #[test]
+    fn test_create_network_request_missing_config() {
+        let value = json!({
+            "NetworkID":"ec22489c52c934f9f788cc99483deb35070eae17b7712e12e569f8a39e0b9a4b",
+            "Options":{
+                "com.docker.network.enable_ipv6":false,
+                "com.docker.network.generic":{}},
+            "IPv4Data":[{"AddressSpace":"LocalDefault","Gateway":"172.23.0.1/16","Pool":"172.23.0.0/16"}],
+            "IPv6Data":[]
+        });
+        let s = value.to_string();
+        // deserializing works fine...
+        let req: CreateNetworkRequest = serde_json::from_str(&s).unwrap();
+        // ...but validation fails
+        assert!(matches!(
+            req.validate(),
+            Err(crate::errors::Error::MissingConfig(_))
+        ));
     }
 }

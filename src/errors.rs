@@ -1,5 +1,6 @@
 use crate::wg::WgError;
 
+#[derive(Debug)]
 pub(crate) enum Error {
     Hyper(hyper::Error),
     SerdeJson(serde_json::Error),
