@@ -357,4 +357,27 @@ mod tests {
             Err(crate::errors::Error::MissingConfig(_))
         ));
     }
+
+    #[test]
+    fn test_create_network_request_invalid_config_name() {
+        fn make_json(config_name: &str) -> String {
+            let value = json!({
+                "NetworkID":"ec22489c52c934f9f788cc99483deb35070eae17b7712e12e569f8a39e0b9a4b",
+                "Options":{
+                    "com.docker.network.enable_ipv6":false,
+                    "com.docker.network.generic":{"wireguard-config":config_name}},
+                "IPv4Data":[{"AddressSpace":"LocalDefault","Gateway":"172.23.0.1/16","Pool":"172.23.0.0/16"}],
+                "IPv6Data":[]
+            });
+            value.to_string()
+        }
+        let s = make_json(".invalid");
+        assert!(serde_json::from_str::<CreateNetworkRequest>(&s).is_err());
+        let s = make_json("");
+        assert!(serde_json::from_str::<CreateNetworkRequest>(&s).is_err());
+        let s = make_json("-invalid");
+        assert!(serde_json::from_str::<CreateNetworkRequest>(&s).is_err());
+        let s = make_json("valid");
+        assert!(serde_json::from_str::<CreateNetworkRequest>(&s).is_ok());
+    }
 }

@@ -169,16 +169,7 @@ fn parse_config_name_from_volume(volume_name: &str) -> Result<&ConfigName, Error
         .strip_prefix(PREFIX)
         .ok_or_else(|| Error::InvalidInput(format!("Volume name must start with '{}'", PREFIX)))?;
 
-    // Check that first character is alphanumeric (not .- or _)
-    if let Some(first_char) = config_name_str.chars().next() {
-        if !first_char.is_ascii_alphanumeric() {
-            return Err(Error::InvalidInput(
-                "Config name must start with an alphanumeric character".to_string(),
-            ));
-        }
-    }
-
-    // Use ConfigName's TryFrom for validation (handles empty, invalid chars, etc.)
+    // Use ConfigName's TryFrom for validation (handles empty, first char, invalid chars, etc.)
     <&ConfigName>::try_from(config_name_str)
         .map_err(|e| Error::InvalidInput(format!("Invalid config name: {}", e.0)))
 }
