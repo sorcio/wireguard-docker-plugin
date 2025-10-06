@@ -138,10 +138,12 @@ mod identifier_tests {
 
     /// Test that the newtype can be serialized and deserialized as owned.
     #[derive(Debug, Serialize, Deserialize)]
+    #[expect(unused)] // Static checking only, not used in code
     struct TestSerdeOwned(TestIdOwned);
 
     /// Test that the newtype can be serialized and deserialized with Cow.
     #[derive(Debug, Serialize, Deserialize)]
+    #[expect(unused)] // Static checking only, not used in code
     struct TestSerdeCow<'a>(std::borrow::Cow<'a, TestId>);
 
     #[test]

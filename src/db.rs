@@ -56,10 +56,7 @@ impl Db {
         network_id: &NetworkId,
     ) -> Result<Network<'static>, std::io::Error> {
         let path = self.network_path(network_id);
-        let network = match std::fs::read_to_string(path) {
-            Ok(network) => network,
-            Err(err) => return Err(err),
-        };
+        let network = std::fs::read_to_string(path)?;
         let network = serde_json::from_str(&network)?;
         Ok(network)
     }

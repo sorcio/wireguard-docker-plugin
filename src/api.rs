@@ -39,6 +39,7 @@ pub(crate) struct CreateNetworkRequestGenericOptions<'a> {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all(deserialize = "PascalCase"))]
+#[expect(unused)] // Might be used in the future
 pub(crate) struct IpamDataV4<'a> {
     pub(crate) address_space: &'a str,
     pub(crate) gateway: &'a str,
@@ -49,6 +50,7 @@ pub(crate) struct IpamDataV4<'a> {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all(deserialize = "PascalCase"))]
+#[expect(unused)] // Might be used in the future
 pub(crate) struct IpamDataV6<'a> {
     pub(crate) address_space: &'a str,
     pub(crate) gateway: &'a str,
