@@ -7,6 +7,7 @@ pub(crate) enum Error {
     Io(std::io::Error),
     Wg(WgError),
     MissingConfig(Vec<&'static str>),
+    InvalidInput(String),
     Abort,
 }
 

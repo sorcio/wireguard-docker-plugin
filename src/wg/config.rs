@@ -39,6 +39,7 @@ pub(crate) struct Config {
     pub(super) listen_port: Option<u16>,
     pub(super) fw_mark: Option<u32>,
     pub(super) address: Option<CidrAddress>,
+    pub(super) dns: Vec<std::net::IpAddr>,
     pub(super) peers: Vec<Peer>,
 }
 
@@ -49,6 +50,22 @@ impl Config {
 
     pub(crate) fn routes(&self) -> impl Iterator<Item = &CidrAddress> {
         self.peers.iter().flat_map(|peer| peer.allowed_ips.iter())
+    }
+
+    pub(crate) fn dns_servers(&self) -> &[std::net::IpAddr] {
+        &self.dns
+    }
+
+    pub(crate) fn format_resolv_conf(&self) -> String {
+        if self.dns.is_empty() {
+            String::new()
+        } else {
+            self.dns
+                .iter()
+                .map(|ip| format!("nameserver {}\n", ip))
+                .collect::<Vec<_>>()
+                .join("")
+        }
     }
 }
 
@@ -127,6 +144,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
     let mut listen_port = None;
     let mut fw_mark = None;
     let mut address = None;
+    let mut dns = Vec::new();
     let mut peers = Vec::new();
     let mut public_key = None;
     let mut preshared_key = None;
@@ -219,6 +237,21 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                     })?;
                     address = Some(addr);
                 }
+                (Section::Interface, "DNS") => {
+                    dns.extend(
+                        value
+                            .split(|c: char| c.is_whitespace() || c == ',')
+                            .filter(|s| !s.is_empty())
+                            .map(|s| {
+                                s.parse::<std::net::IpAddr>().map_err(|_| {
+                                    WgErrorInner::ConfigParse(format!(
+                                        "line {line}: DNS should be a valid IP address"
+                                    ))
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    );
+                }
                 (Section::Peer, "PublicKey") => {
                     let key: Key = value.parse().map_err(|_| {
                         WgErrorInner::ConfigParse(format!(
@@ -289,6 +322,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
         listen_port,
         fw_mark,
         address,
+        dns,
         peers,
     })
 }
@@ -316,4 +350,169 @@ impl ConfigProvider {
 
 enum ConfigProviderInner {
     File { base_path: PathBuf },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_dns_comma_separated() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1, 10.0.0.2
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "10.0.0.2");
+    }
+
+    #[test]
+    fn test_parse_dns_space_separated() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1 10.0.0.2
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "10.0.0.2");
+    }
+
+    #[test]
+    fn test_parse_dns_mixed_separators() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1, 10.0.0.2 10.0.0.3
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 3);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "10.0.0.2");
+        assert_eq!(config.dns[2].to_string(), "10.0.0.3");
+    }
+
+    #[test]
+    fn test_parse_dns_ipv6() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 2001:db8::1, 2001:db8::2
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "2001:db8::1");
+        assert_eq!(config.dns[1].to_string(), "2001:db8::2");
+    }
+
+    #[test]
+    fn test_parse_dns_mixed_ipv4_ipv6() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1, 2001:db8::1
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "2001:db8::1");
+    }
+
+    #[test]
+    fn test_parse_dns_no_dns() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_dns_invalid_ip() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = not-an-ip
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        assert!(parse_config(config_text).is_err());
+    }
+
+    #[test]
+    fn test_format_resolv_conf_empty() {
+        let config = Config {
+            private_key: Key([0u8; 32]),
+            listen_port: None,
+            fw_mark: None,
+            address: None,
+            dns: vec![],
+            peers: vec![],
+        };
+        assert_eq!(config.format_resolv_conf(), "");
+    }
+
+    #[test]
+    fn test_format_resolv_conf_single() {
+        let config = Config {
+            private_key: Key([0u8; 32]),
+            listen_port: None,
+            fw_mark: None,
+            address: None,
+            dns: vec!["10.0.0.1".parse().unwrap()],
+            peers: vec![],
+        };
+        assert_eq!(config.format_resolv_conf(), "nameserver 10.0.0.1\n");
+    }
+
+    #[test]
+    fn test_format_resolv_conf_multiple() {
+        let config = Config {
+            private_key: Key([0u8; 32]),
+            listen_port: None,
+            fw_mark: None,
+            address: None,
+            dns: vec![
+                "10.0.0.1".parse().unwrap(),
+                "10.0.0.2".parse().unwrap(),
+                "2001:db8::1".parse().unwrap(),
+            ],
+            peers: vec![],
+        };
+        assert_eq!(
+            config.format_resolv_conf(),
+            "nameserver 10.0.0.1\nnameserver 10.0.0.2\nnameserver 2001:db8::1\n"
+        );
+    }
 }

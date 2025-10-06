@@ -213,6 +213,94 @@ impl<'a> Validate for LeaveRequest<'a> {
     }
 }
 
+// Volume Plugin API Types
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct VolumeCreateRequest<'a> {
+    #[serde(borrow)]
+    pub(crate) name: &'a str,
+    #[serde(default)]
+    pub(crate) opts: HashMap<&'a str, &'a str>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct VolumeRemoveRequest<'a> {
+    #[serde(borrow)]
+    pub(crate) name: &'a str,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct VolumeMountRequest<'a> {
+    #[serde(borrow)]
+    pub(crate) name: &'a str,
+    #[serde(borrow, rename = "ID")]
+    pub(crate) id: &'a str,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct VolumeUnmountRequest<'a> {
+    #[serde(borrow)]
+    pub(crate) name: &'a str,
+    #[serde(borrow, rename = "ID")]
+    pub(crate) id: &'a str,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct VolumeGetRequest<'a> {
+    #[serde(borrow)]
+    pub(crate) name: &'a str,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all(deserialize = "PascalCase"))]
+pub(crate) struct VolumePathRequest<'a> {
+    #[serde(borrow)]
+    pub(crate) name: &'a str,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all(serialize = "PascalCase"))]
+pub(crate) struct VolumeMountResponse<'a> {
+    pub(crate) mountpoint: &'a str,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all(serialize = "PascalCase"))]
+pub(crate) struct VolumePathResponse<'a> {
+    pub(crate) mountpoint: &'a str,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all(serialize = "PascalCase"))]
+pub(crate) struct VolumeGetResponse<'a> {
+    pub(crate) volume: VolumeInfo<'a>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all(serialize = "PascalCase"))]
+pub(crate) struct VolumeInfo<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) mountpoint: &'a str,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all(serialize = "PascalCase"))]
+pub(crate) struct VolumeListResponse {
+    pub(crate) volumes: Vec<VolumeInfoOwned>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all(serialize = "PascalCase"))]
+pub(crate) struct VolumeInfoOwned {
+    pub(crate) name: String,
+    pub(crate) mountpoint: String,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
