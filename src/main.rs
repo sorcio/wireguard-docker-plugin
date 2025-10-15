@@ -1,7 +1,9 @@
-use std::process::ExitCode;
+use std::{path::PathBuf, process::ExitCode, sync::Arc};
 
 mod api;
 mod db;
+#[cfg(target_os = "linux")]
+mod dnsfs;
 mod errors;
 mod http;
 mod logging;
@@ -42,7 +44,7 @@ fn main() -> ExitCode {
         .thread_name("worker")
         .build()
         .unwrap();
-    match rt.block_on(async_main()) {
+    match rt.block_on(async_main(rt.handle().clone())) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             log::error!("Error: {:?}", e);
@@ -51,17 +53,32 @@ fn main() -> ExitCode {
     }
 }
 
-async fn async_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn async_main(
+    rt: tokio::runtime::Handle,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket_path = "/run/docker/plugins/wireguard.sock";
-    let db_path = "wireguard_db";
-    let conf_path = "wireguard_conf";
-    let config_provider = wg::ConfigProvider::new_file(conf_path.into());
+    let db_path = PathBuf::from("wireguard_db");
+    let conf_path = PathBuf::from("wireguard_conf");
+    let config_provider = wg::ConfigProvider::new_file(conf_path);
+    // TODO: make this work outside of managed Docker plugins (v2 plugins)
+    let dnsfs_path = PathBuf::from("/mounts/dnsfs");
 
-    let service = service::NetworkPluginService::new(db_path, config_provider)?;
+    let service = Arc::new(service::NetworkPluginService::new(
+        db_path,
+        dnsfs_path,
+        config_provider,
+        rt.clone(),
+    )?);
 
     let shutdown = std::pin::pin!(shutdown_signal());
 
+    let background_fs = dnsfs::spawn(service.clone(), std::path::Path::new("/mounts/dnsfs"))?;
     http::server(socket_path, service, shutdown).await?;
+
+    tokio::task::spawn_blocking(|| {
+        background_fs.join();
+    })
+    .await?;
 
     if std::fs::remove_file(socket_path).is_ok() {
         log::info!("Removed socket file");

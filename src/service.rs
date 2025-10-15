@@ -5,32 +5,34 @@ use crate::{
     db::{open as db_open, Db},
     errors::Error,
     types::{ConfigName, EndpointId, NetworkId},
-    wg::{CidrAddress, ConfigProvider, Wg},
+    wg::{CidrAddress, Config, ConfigProvider, Wg},
 };
 use std::convert::TryFrom;
 
 pub(crate) struct NetworkPluginService {
-    pub(crate) db: Arc<Db>,
-    pub(crate) wg: Wg,
-    pub(crate) config_provider: ConfigProvider,
-    dns_base_path: PathBuf,
+    db: Arc<Db>,
+    wg: Wg,
+    config_provider: ConfigProvider,
+    dnsfs_path: PathBuf,
+    rt: tokio::runtime::Handle,
 }
 
 impl NetworkPluginService {
     pub(crate) fn new(
-        db_path: impl AsRef<std::path::Path>,
+        db_path: PathBuf,
+        dnsfs_path: PathBuf,
         config_provider: ConfigProvider,
+        rt: tokio::runtime::Handle,
     ) -> Result<Self, std::io::Error> {
-        let db_path = db_path.as_ref();
         let db = Arc::new(db_open(db_path)?);
         let wg = Wg::new().expect("Failed to create WireGuard client");
-        let dns_base_path = db_path.join("dns");
-        std::fs::create_dir_all(&dns_base_path)?;
+        std::fs::create_dir_all(&dnsfs_path)?;
         Ok(Self {
             db,
             wg,
             config_provider,
-            dns_base_path,
+            dnsfs_path,
+            rt,
         })
     }
 
@@ -76,14 +78,13 @@ impl NetworkPluginService {
             .await?;
         let if_name = self
             .wg
-            .create_interface(options.endpoint_id, config.clone())
+            .create_interface(
+                options.endpoint_id,
+                config.clone(),
+                options.network_id.as_str(),
+            )
             .await?;
         let routes = config.routes().cloned().collect();
-
-        // Update DNS resolv.conf if volume exists
-        self.update_dns_for_network(network.config_name(), &config)
-            .await?;
-
         Ok(CreatedInterface { if_name, routes })
     }
 
@@ -95,83 +96,133 @@ impl NetworkPluginService {
     // Volume Plugin Methods
 
     pub(crate) async fn create_volume(&self, name: &str) -> Result<(), Error> {
-        let config_name = parse_config_name_from_volume(name)?;
-        let volume_path = self.dns_base_path.join(config_name.as_ref());
-
-        tokio::fs::create_dir_all(&volume_path).await?;
-
-        let resolv_conf_path = volume_path.join("resolv.conf");
-        // Create empty resolv.conf file
-        tokio::fs::write(&resolv_conf_path, b"").await?;
-
-        log::info!(volume_name = name, path:? = volume_path; "Created DNS volume");
+        // This is actually a noop for us. If Docker wants to keep track of volumes,
+        // it can do it for us, but we don't need to do anything here.
+        let volume_name = parse_volume_name(name)?;
+        log::info!(raw_volume_name = name, volume_name:?; "Created DNS volume");
         Ok(())
     }
 
     pub(crate) async fn remove_volume(&self, name: &str) -> Result<(), Error> {
-        let config_name = parse_config_name_from_volume(name)?;
-        let volume_path = self.dns_base_path.join(config_name.as_ref());
-
-        tokio::fs::remove_dir_all(&volume_path).await?;
-
-        log::info!(volume_name = name, path:? = volume_path; "Removed DNS volume");
+        // See comment in create_volume().
+        let volume_name = parse_volume_name(name)?;
+        log::info!(raw_volume_name = name, volume_name:?; "Removed DNS volume");
         Ok(())
     }
 
-    pub(crate) fn get_volume_path(&self, name: &str) -> Result<PathBuf, Error> {
-        let config_name = parse_config_name_from_volume(name)?;
-        Ok(self.dns_base_path.join(config_name.as_ref()))
+    pub(crate) async fn get_volume_path(&self, name: &str) -> Result<PathBuf, Error> {
+        if name == "wireguard-dns" {
+            return Ok("/mounts/dnsfs/magic".into());
+        }
+        #[cfg(debug_assertions)]
+        if name == "wireguard-debug-dns" {
+            return Ok("/mounts/dnsfs/".into());
+        }
+        let volume_name = parse_volume_name(name)?;
+        let volume_path = self.path_for_dns_config(volume_name);
+        Ok(volume_path)
+    }
+
+    fn path_for_dns_config(&self, volume_name: VolumeName<'_>) -> PathBuf {
+        match volume_name {
+            VolumeName::Magic => self.dnsfs_path.join("magic"),
+            VolumeName::Config(config_name) => self
+                .dnsfs_path
+                .join(config_name.as_ref())
+                .with_added_extension("resolv.conf"),
+            #[cfg(debug_assertions)]
+            VolumeName::Debug => self.dnsfs_path.clone(),
+        }
     }
 
     pub(crate) async fn list_volumes(&self) -> Result<Vec<(String, PathBuf)>, Error> {
-        let mut volumes = Vec::new();
-
-        let mut entries = tokio::fs::read_dir(&self.dns_base_path).await?;
-
+        let mut volumes = vec![(
+            VolumeName::Magic.to_volume_name_string(),
+            self.path_for_dns_config(VolumeName::Magic),
+        )];
+        let mut entries = tokio::fs::read_dir(&self.dnsfs_path).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.is_dir() {
-                if let Some(config_name) = path.file_name().and_then(|n| n.to_str()) {
-                    let volume_name = format!("wireguard-dns-{}", config_name);
-                    volumes.push((volume_name, path));
-                }
+            if let Some(config_name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".resolv.conf"))
+                .and_then(|n| <&ConfigName>::try_from(n).ok())
+            {
+                let volume_name = VolumeName::Config(config_name);
+                let volume_name_str = volume_name.to_volume_name_string();
+                let mount_path = self.path_for_dns_config(volume_name);
+                volumes.push((volume_name_str, mount_path));
             }
         }
-
         Ok(volumes)
     }
 
-    async fn update_dns_for_network(
-        &self,
-        config_name: &ConfigName,
-        config: &crate::wg::Config,
-    ) -> Result<(), Error> {
-        let volume_path = self.dns_base_path.join(config_name.as_ref());
-        let resolv_conf_path = volume_path.join("resolv.conf");
+    // Methods used by ResolveConfFS (FUSE filesystem):
 
-        // Only update if the volume exists
-        if tokio::fs::try_exists(&resolv_conf_path)
-            .await
-            .unwrap_or(false)
-        {
-            let content = config.format_resolv_conf();
-            tokio::fs::write(&resolv_conf_path, content.as_bytes()).await?;
-            log::debug!(config:? = config_name.as_ref(), dns_count = config.dns_servers().len(); "Updated resolv.conf for config");
-        }
+    pub(crate) fn lookup_config(&self, name: &str) -> Option<Config> {
+        let config_name = <&ConfigName>::try_from(name).ok()?;
+        self.rt
+            .block_on(async move { self.config_provider.get_config(config_name).await.ok() })
+    }
 
-        Ok(())
+    pub(crate) fn lookup_config_by_network_id(&self, network_id: &NetworkId) -> Option<Config> {
+        let network = self.db.get_network(network_id).ok()?;
+        log::debug!(network_id = network_id.as_str(); "lookup_config_by_network_id: found network");
+        let config_name = network.config_name();
+        log::debug!(network_id = network_id.as_str(), config = config_name.as_str(); "lookup_config_by_network_id: found config");
+        self.rt
+            .block_on(async move { self.config_provider.get_config(config_name).await.ok() })
     }
 }
 
-fn parse_config_name_from_volume(volume_name: &str) -> Result<&ConfigName, Error> {
-    const PREFIX: &str = "wireguard-dns-";
-    let config_name_str = volume_name
-        .strip_prefix(PREFIX)
-        .ok_or_else(|| Error::InvalidInput(format!("Volume name must start with '{}'", PREFIX)))?;
+const VOLUME_NAME_PREFIX: &str = "wireguard-dns";
+const DEBUG_VOLUME_NAME: &str = "wireguard-dnsfs-debug";
 
-    // Use ConfigName's TryFrom for validation (handles empty, first char, invalid chars, etc.)
-    <&ConfigName>::try_from(config_name_str)
-        .map_err(|e| Error::InvalidInput(format!("Invalid config name: {}", e.0)))
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum VolumeName<'a> {
+    Magic,
+    Config(&'a ConfigName),
+    #[cfg(debug_assertions)]
+    Debug,
+}
+
+impl VolumeName<'_> {
+    fn to_volume_name_string(self) -> String {
+        match self {
+            VolumeName::Magic => VOLUME_NAME_PREFIX.to_string(),
+            VolumeName::Config(config_name) => {
+                format!("{VOLUME_NAME_PREFIX}-{}", config_name.as_str())
+            }
+            #[cfg(debug_assertions)]
+            VolumeName::Debug => DEBUG_VOLUME_NAME.to_string(),
+        }
+    }
+}
+
+fn parse_volume_name(volume_name: &str) -> Result<VolumeName<'_>, Error> {
+    #[cfg(debug_assertions)]
+    if volume_name == DEBUG_VOLUME_NAME {
+        return Ok(VolumeName::Debug);
+    }
+    let stripped = volume_name
+        .strip_prefix(VOLUME_NAME_PREFIX)
+        .ok_or_else(|| {
+            Error::InvalidInput(format!(
+                "Volume name must start with '{VOLUME_NAME_PREFIX}'"
+            ))
+        })?;
+    if stripped.is_empty() {
+        Ok(VolumeName::Magic)
+    } else if let Some(config_name_str) = stripped.strip_prefix('-') {
+        let config_name = <&ConfigName>::try_from(config_name_str)
+            .map_err(|e| Error::InvalidInput(format!("Invalid config name: {}", e.0)))?;
+        Ok(VolumeName::Config(config_name))
+    } else {
+        Err(Error::InvalidInput(format!(
+            "Volume name must start with '{VOLUME_NAME_PREFIX}-'"
+        )))
+    }
 }
 
 #[derive(Debug)]
@@ -218,73 +269,80 @@ mod tests {
     #[test]
     fn test_parse_config_name_from_volume_valid() {
         assert_eq!(
-            parse_config_name_from_volume("wireguard-dns-myconfig")
-                .unwrap()
-                .as_ref(),
-            std::path::Path::new("myconfig")
+            parse_volume_name("wireguard-dns-myconfig").unwrap(),
+            VolumeName::Config("myconfig".try_into().unwrap())
         );
         assert_eq!(
-            parse_config_name_from_volume("wireguard-dns-my-config")
-                .unwrap()
-                .as_ref(),
-            std::path::Path::new("my-config")
+            parse_volume_name("wireguard-dns-my-config").unwrap(),
+            VolumeName::Config("my-config".try_into().unwrap())
         );
         assert_eq!(
-            parse_config_name_from_volume("wireguard-dns-my_config")
-                .unwrap()
-                .as_ref(),
-            std::path::Path::new("my_config")
+            parse_volume_name("wireguard-dns-my_config").unwrap(),
+            VolumeName::Config("my_config".try_into().unwrap())
         );
         assert_eq!(
-            parse_config_name_from_volume("wireguard-dns-my.config")
-                .unwrap()
-                .as_ref(),
-            std::path::Path::new("my.config")
+            parse_volume_name("wireguard-dns-my.config").unwrap(),
+            VolumeName::Config("my.config".try_into().unwrap())
         );
         assert_eq!(
-            parse_config_name_from_volume("wireguard-dns-config123")
-                .unwrap()
-                .as_ref(),
-            std::path::Path::new("config123")
+            parse_volume_name("wireguard-dns-config123").unwrap(),
+            VolumeName::Config("config123".try_into().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_volume_name_magic() {
+        assert_eq!(
+            parse_volume_name("wireguard-dns").unwrap(),
+            VolumeName::Magic,
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn test_parse_volume_name_debug() {
+        assert_eq!(
+            parse_volume_name("wireguard-dnsfs-debug").unwrap(),
+            VolumeName::Debug,
         );
     }
 
     #[test]
     fn test_parse_config_name_from_volume_starts_with_alphanumeric() {
         // First character must be alphanumeric
-        assert!(parse_config_name_from_volume("wireguard-dns--invalid").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-_invalid").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-.invalid").is_err());
+        assert!(parse_volume_name("wireguard-dns--invalid").is_err());
+        assert!(parse_volume_name("wireguard-dns-_invalid").is_err());
+        assert!(parse_volume_name("wireguard-dns-.invalid").is_err());
         // But these are valid
-        assert!(parse_config_name_from_volume("wireguard-dns-a-config").is_ok());
-        assert!(parse_config_name_from_volume("wireguard-dns-1config").is_ok());
+        assert!(parse_volume_name("wireguard-dns-a-config").is_ok());
+        assert!(parse_volume_name("wireguard-dns-1config").is_ok());
     }
 
     #[test]
     fn test_parse_config_name_from_volume_invalid_prefix() {
-        assert!(parse_config_name_from_volume("myconfig").is_err());
-        assert!(parse_config_name_from_volume("wireguard-myconfig").is_err());
-        assert!(parse_config_name_from_volume("dns-myconfig").is_err());
+        assert!(parse_volume_name("myconfig").is_err());
+        assert!(parse_volume_name("wireguard-myconfig").is_err());
+        assert!(parse_volume_name("dns-myconfig").is_err());
     }
 
     #[test]
     fn test_parse_config_name_from_volume_empty_config() {
-        assert!(parse_config_name_from_volume("wireguard-dns-").is_err());
+        assert!(parse_volume_name("wireguard-dns-").is_err());
     }
 
     #[test]
     fn test_parse_config_name_from_volume_path_traversal() {
-        assert!(parse_config_name_from_volume("wireguard-dns-../etc/passwd").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-foo/../bar").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-foo/bar").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-/absolute").is_err());
+        assert!(parse_volume_name("wireguard-dns-../etc/passwd").is_err());
+        assert!(parse_volume_name("wireguard-dns-foo/../bar").is_err());
+        assert!(parse_volume_name("wireguard-dns-foo/bar").is_err());
+        assert!(parse_volume_name("wireguard-dns-/absolute").is_err());
     }
 
     #[test]
     fn test_parse_config_name_from_volume_invalid_chars() {
-        assert!(parse_config_name_from_volume("wireguard-dns-foo bar").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-foo!bar").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-foo@bar").is_err());
-        assert!(parse_config_name_from_volume("wireguard-dns-foo\\bar").is_err());
+        assert!(parse_volume_name("wireguard-dns-foo bar").is_err());
+        assert!(parse_volume_name("wireguard-dns-foo!bar").is_err());
+        assert!(parse_volume_name("wireguard-dns-foo@bar").is_err());
+        assert!(parse_volume_name("wireguard-dns-foo\\bar").is_err());
     }
 }

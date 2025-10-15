@@ -70,6 +70,14 @@ macro_rules! identifier_newtype {
             }
         }
 
+        impl ::std::ops::Deref for $owned_name {
+            type Target = $ref_name;
+
+            fn deref(&self) -> &Self::Target {
+                ::std::borrow::Borrow::<$ref_name>::borrow(self)
+            }
+        }
+
         impl ToOwned for $ref_name {
             type Owned = $owned_name;
             fn to_owned(&self) -> Self::Owned {
@@ -83,7 +91,6 @@ macro_rules! identifier_newtype {
 
 identifier_newtype!(pub(crate) &NetworkId, NetworkIdOwned);
 
-#[cfg(test)]
 impl NetworkId {
     pub fn as_str(&self) -> &str {
         &self.0
@@ -106,7 +113,6 @@ impl EndpointId {
 
 identifier_newtype!(pub(crate) &ConfigName, ConfigNameOwned);
 
-#[cfg(test)]
 impl ConfigName {
     pub fn as_str(&self) -> &str {
         &self.0

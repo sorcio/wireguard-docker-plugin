@@ -60,6 +60,7 @@ impl Wg {
         &self,
         endpoint_id: &EndpointId,
         config: Config,
+        ifalias: &str,
     ) -> Result<String, WgError> {
         let if_name = Self::interface_name(endpoint_id);
         self.rt
@@ -81,6 +82,9 @@ impl Wg {
             .map_err(WgErrorInner::from)?
             .map_err(WgErrorInner::from)?;
         }
+        set_ifalias(self.rt.clone(), &if_name, ifalias)
+            .await
+            .map_err(WgErrorInner::from)?;
         Ok(if_name)
     }
 
@@ -126,15 +130,22 @@ async fn delete_link_if_found(
     } else {
         Ok(true)
     }
+}
 
-    // // old implementation
-    // let mut links = handle.link().get().match_name(name).execute();
-    // if let Some(link) = links.try_next().await? {
-    //     handle.link().del(link.header.index).execute().await?;
-    //     Ok(true)
-    // } else {
-    //     Ok(false)
-    // }
+async fn set_ifalias(
+    handle: rtnetlink::Handle,
+    if_name: &str,
+    alias: &str,
+) -> Result<(), rtnetlink::Error> {
+    let mut message = LinkMessage::default();
+    message
+        .attributes
+        .push(LinkAttribute::IfName(if_name.to_string()));
+    message
+        .attributes
+        .push(LinkAttribute::IfAlias(alias.to_string()));
+    let request = handle.link().set(message);
+    request.execute().await
 }
 
 fn config_to_uapi_device<'a>(

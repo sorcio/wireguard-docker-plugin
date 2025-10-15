@@ -26,11 +26,11 @@ use log::log_enabled;
 use serde_json::json;
 
 struct HttpService {
-    service: NetworkPluginService,
+    service: Arc<NetworkPluginService>,
 }
 
 impl HttpService {
-    fn new(service: NetworkPluginService) -> Self {
+    fn new(service: Arc<NetworkPluginService>) -> Self {
         Self { service }
     }
 
@@ -208,13 +208,8 @@ impl HttpService {
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
         let body: Body<VolumeMountRequest> = parse_request(req).await?;
         let request = body.parse_json()?;
-        let path = self.service.get_volume_path(request.name)?;
-        let path_str = path.to_str().ok_or_else(|| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid path",
-            ))
-        })?;
+        let path = self.service.get_volume_path(request.name).await?;
+        let path_str = path.to_str().ok_or(Error::Abort)?;
         let response = VolumeMountResponse {
             mountpoint: path_str,
         };
@@ -236,13 +231,8 @@ impl HttpService {
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
         let body: Body<VolumeGetRequest> = parse_request(req).await?;
         let request = body.parse_json()?;
-        let path = self.service.get_volume_path(request.name)?;
-        let path_str = path.to_str().ok_or_else(|| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid path",
-            ))
-        })?;
+        let path = self.service.get_volume_path(request.name).await?;
+        let path_str = path.to_str().ok_or(Error::Abort)?;
         let response = VolumeGetResponse {
             volume: VolumeInfo {
                 name: request.name,
@@ -258,13 +248,8 @@ impl HttpService {
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Error> {
         let body: Body<VolumePathRequest> = parse_request(req).await?;
         let request = body.parse_json()?;
-        let path = self.service.get_volume_path(request.name)?;
-        let path_str = path.to_str().ok_or_else(|| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid path",
-            ))
-        })?;
+        let path = self.service.get_volume_path(request.name).await?;
+        let path_str = path.to_str().ok_or(Error::Abort)?;
         let response = VolumePathResponse {
             mountpoint: path_str,
         };
@@ -389,7 +374,7 @@ fn error_response(
 
 pub(crate) async fn server(
     path: &str,
-    service: NetworkPluginService,
+    service: Arc<NetworkPluginService>,
     mut shutdown: std::pin::Pin<&mut impl Future<Output = ()>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = UnixListener::bind(path)?;

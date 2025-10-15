@@ -44,7 +44,19 @@
     "types": ["docker.networkdriver/1.0", "docker.volumedriver/1.0"],
     "socket": "wireguard.sock"
   },
+  "propagatedMount": "/mounts",
   "linux": {
-    "capabilities": ["CAP_SYS_ADMIN", "CAP_NET_ADMIN"]
+    "capabilities": ["CAP_SYS_ADMIN", "CAP_NET_ADMIN"],
+    "devices": [
+        {
+            "path": "/dev/fuse",
+            "type": "c",
+            "major": 10,
+            "minor": 229,
+            "fileMode": 438,
+            "uid": 0,
+            "gid": 0
+        }
+    ]
   }
 }

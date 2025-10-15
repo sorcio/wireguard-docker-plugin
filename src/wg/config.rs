@@ -52,10 +52,6 @@ impl Config {
         self.peers.iter().flat_map(|peer| peer.allowed_ips.iter())
     }
 
-    pub(crate) fn dns_servers(&self) -> &[std::net::IpAddr] {
-        &self.dns
-    }
-
     pub(crate) fn format_resolv_conf(&self) -> String {
         if self.dns.is_empty() {
             String::new()

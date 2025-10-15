@@ -221,7 +221,7 @@ pub(crate) struct VolumeCreateRequest<'a> {
     #[serde(borrow)]
     pub(crate) name: &'a str,
     #[serde(default)]
-    pub(crate) opts: HashMap<&'a str, &'a str>,
+    pub(crate) opts: Option<HashMap<&'a str, &'a str>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
