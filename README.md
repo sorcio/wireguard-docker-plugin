@@ -87,18 +87,25 @@ with the WireGuard configuration.
 ### DNS configuration
 
 If the WireGuard configuration includes DNS servers, you can use a volume to
-provide them to the container. Create a volume with the naming convention
-`wireguard-dns-<config-name>`:
+provide them to the container. The easiest way to do that is to use the
+`wireguard-dns` magic volume provided by this plugin:
 
 ```shell
-docker volume create -d wireguard wireguard-dns-mynet-1
+docker run \
+  --network mynet \
+  -v wireguard-dns:/etc/resolv.conf \
+  myimage
 ```
 
-Then mount it to `/etc/resolv.conf` when running the container:
+This will work in most cases. In case the automatic detection does not work, or
+if you need to specify the configuration file to take DNS servers from, you can
+use the explicit form. The `wireguard-dns-<config name>` volume is created on
+demand, so you don't need to create it manually, and you can just mount it:
 
 ```shell
-docker run --network mynet \
-  -v wireguard-dns-mynet-1:/etc/resolv.conf:ro \
+docker run \
+  --network mynet \
+  -v wireguard-dns-mynet-1:/etc/resolv.conf:ro,nocopy \
   myimage
 ```
 
@@ -106,6 +113,34 @@ The plugin will automatically populate the `resolv.conf` file with the DNS
 servers from the configuration when the container connects to the network.
 Note that the volume name uses the configuration name (e.g., `mynet-1`), not
 the Docker network name (e.g., `mynet`).
+
+> [!NOTE]
+> In case something goes wrong with the `wireguard-dns` or
+> `wireguard-dns-<config name>` volumes, no error is reported. Instead, the
+> resulting `resolv.conf` file will be empty. Common causes:
+> - There is no WireGuard configuration file with the given name (see Configuration above)
+> - The WireGuard configuration doesn't include a `DNS` line
+> - For `wireguard-dns`, the automatic network detection failed (try the explicit form), or the container is not attached to a network managed by the plugin
+
+<details>
+<summary>How does the magic volume work?</summary>
+
+When `wireguard-docker-plugin` creates a network interface, it attaches an
+identifier to the interface `ifalias` attribute.
+
+Whenever a process reads the mounted `resolv.conf` magic file, the plugin,
+through a FUSE filesystem, is able to look up the PID of the process, inspect
+its network namespace, check for an interface called `wg0`, read its ifalias,
+and map back the identifier to the WireGuard configuration name.
+
+This can fail in unusual setups, such as when `ifalias` is altered by another
+tool, not supported by the kernel; or `wg0` is not the desired interface; or
+when the plugin is not allowed to inspect a containerized process's network
+namespace.
+
+In these cases, use the explicit `wireguard-dns-<config name>` form, which will
+provide a simple mapping to a more regular file in the FUSE filesystem.
+</details>
 
 ## Limitations
 
