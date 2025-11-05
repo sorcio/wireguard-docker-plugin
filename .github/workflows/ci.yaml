@@ -16,7 +16,7 @@ env:
 jobs:
   build_and_test:
     name: Build and test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -24,9 +24,11 @@ jobs:
           - stable
           - beta
           - nightly
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm64
+            target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -43,4 +45,3 @@ jobs:
       - run: cargo clippy --verbose --target ${{ matrix.target }}
       - run: cargo build --verbose --target ${{ matrix.target }}
       - run: cargo test --verbose --target ${{ matrix.target }}
-        if: (startsWith(matrix.target, 'x86_64-') && runner.arch == 'X64') || (startsWith(matrix.target, 'aarch64-') && runner.arch == 'ARM64')
