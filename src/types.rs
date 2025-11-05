@@ -89,7 +89,7 @@ macro_rules! identifier_newtype {
 
 /////////////////
 
-identifier_newtype!(pub(crate) &NetworkId, NetworkIdOwned);
+identifier_newtype!(pub &NetworkId, NetworkIdOwned);
 
 impl NetworkId {
     pub fn as_str(&self) -> &str {
@@ -103,7 +103,7 @@ impl AsRef<Path> for NetworkId {
     }
 }
 
-identifier_newtype!(pub(crate) &EndpointId, EndpointIdOwned);
+identifier_newtype!(pub &EndpointId, EndpointIdOwned);
 
 impl EndpointId {
     pub fn as_str(&self) -> &str {
@@ -111,7 +111,7 @@ impl EndpointId {
     }
 }
 
-identifier_newtype!(pub(crate) &ConfigName, ConfigNameOwned);
+identifier_newtype!(pub &ConfigName, ConfigNameOwned);
 
 impl ConfigName {
     pub fn as_str(&self) -> &str {

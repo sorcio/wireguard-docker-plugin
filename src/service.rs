@@ -5,41 +5,37 @@ use crate::{
     db::{open as db_open, Db},
     errors::Error,
     types::{ConfigName, EndpointId, NetworkId},
-    wg::{CidrAddress, Config, ConfigProvider, Wg},
+    wg::{CidrAddress, Config, ConfigProvider, Wg, WgDefault},
 };
 use std::convert::TryFrom;
 
-pub(crate) struct NetworkPluginService {
+pub struct NetworkPluginService<WgImpl = WgDefault> {
     db: Arc<Db>,
-    wg: Wg,
+    wg: WgImpl,
     config_provider: ConfigProvider,
     dnsfs_path: PathBuf,
-    rt: tokio::runtime::Handle,
+    rt: Option<tokio::runtime::Handle>,
 }
 
-impl NetworkPluginService {
-    pub(crate) fn new(
+impl<WgImpl: Wg> NetworkPluginService<WgImpl> {
+    pub fn new(
         db_path: PathBuf,
         dnsfs_path: PathBuf,
         config_provider: ConfigProvider,
-        rt: tokio::runtime::Handle,
     ) -> Result<Self, std::io::Error> {
         let db = Arc::new(db_open(db_path)?);
-        let wg = Wg::new().expect("Failed to create WireGuard client");
+        let wg = WgImpl::new().expect("Failed to create WireGuard client");
         std::fs::create_dir_all(&dnsfs_path)?;
         Ok(Self {
             db,
             wg,
             config_provider,
             dnsfs_path,
-            rt,
+            rt: tokio::runtime::Handle::try_current().ok(),
         })
     }
 
-    pub(crate) async fn create_network(
-        &self,
-        options: CreateNetworkOptions<'_>,
-    ) -> Result<(), Error> {
+    pub async fn create_network(&self, options: CreateNetworkOptions<'_>) -> Result<(), Error> {
         tokio::task::block_in_place(|| {
             self.db
                 .create_network(options.network_id, options.config_name)
@@ -47,15 +43,12 @@ impl NetworkPluginService {
         .map_err(Error::from)
     }
 
-    pub(crate) async fn delete_network(
-        &self,
-        options: DeleteNetworkOptions<'_>,
-    ) -> Result<(), Error> {
+    pub async fn delete_network(&self, options: DeleteNetworkOptions<'_>) -> Result<(), Error> {
         tokio::task::block_in_place(|| self.db.delete_network(options.network_id))
             .map_err(Error::from)
     }
 
-    pub(crate) async fn create_endpoint(
+    pub async fn create_endpoint(
         &self,
         options: CreateEndpointOptions<'_>,
     ) -> Result<crate::wg::Config, Error> {
@@ -67,7 +60,7 @@ impl NetworkPluginService {
         Ok(config)
     }
 
-    pub(crate) async fn setup_container(
+    pub async fn setup_container(
         &self,
         options: JoinOptions<'_>,
     ) -> Result<CreatedInterface, Error> {
@@ -88,14 +81,14 @@ impl NetworkPluginService {
         Ok(CreatedInterface { if_name, routes })
     }
 
-    pub(crate) async fn teardown_container(&self, options: LeaveOptions<'_>) -> Result<(), Error> {
+    pub async fn teardown_container(&self, options: LeaveOptions<'_>) -> Result<(), Error> {
         self.wg.delete_interface(options.endpoint_id).await;
         Ok(())
     }
 
     // Volume Plugin Methods
 
-    pub(crate) async fn create_volume(&self, name: &str) -> Result<(), Error> {
+    pub async fn create_volume(&self, name: &str) -> Result<(), Error> {
         // This is actually a noop for us. If Docker wants to keep track of volumes,
         // it can do it for us, but we don't need to do anything here.
         let volume_name = parse_volume_name(name)?;
@@ -103,14 +96,14 @@ impl NetworkPluginService {
         Ok(())
     }
 
-    pub(crate) async fn remove_volume(&self, name: &str) -> Result<(), Error> {
+    pub async fn remove_volume(&self, name: &str) -> Result<(), Error> {
         // See comment in create_volume().
         let volume_name = parse_volume_name(name)?;
         log::info!(raw_volume_name = name, volume_name:?; "Removed DNS volume");
         Ok(())
     }
 
-    pub(crate) async fn get_volume_path(&self, name: &str) -> Result<PathBuf, Error> {
+    pub async fn get_volume_path(&self, name: &str) -> Result<PathBuf, Error> {
         if name == "wireguard-dns" {
             return Ok("/mounts/dnsfs/magic".into());
         }
@@ -135,7 +128,7 @@ impl NetworkPluginService {
         }
     }
 
-    pub(crate) async fn list_volumes(&self) -> Result<Vec<(String, PathBuf)>, Error> {
+    pub async fn list_volumes(&self) -> Result<Vec<(String, PathBuf)>, Error> {
         let mut volumes = vec![(
             VolumeName::Magic.to_volume_name_string(),
             self.path_for_dns_config(VolumeName::Magic),
@@ -160,18 +153,28 @@ impl NetworkPluginService {
 
     // Methods used by ResolveConfFS (FUSE filesystem):
 
-    pub(crate) fn lookup_config(&self, name: &str) -> Option<Config> {
-        let config_name = <&ConfigName>::try_from(name).ok()?;
+    pub fn set_tokio_runtime(&mut self, rt: tokio::runtime::Handle) {
+        self.rt = Some(rt);
+    }
+
+    fn rt(&self) -> &tokio::runtime::Handle {
         self.rt
+            .as_ref()
+            .expect("Tokio runtime not set. Ensure set_tokio_runtime() is called")
+    }
+
+    pub fn lookup_config(&self, name: &str) -> Option<Config> {
+        let config_name = <&ConfigName>::try_from(name).ok()?;
+        self.rt()
             .block_on(async move { self.config_provider.get_config(config_name).await.ok() })
     }
 
-    pub(crate) fn lookup_config_by_network_id(&self, network_id: &NetworkId) -> Option<Config> {
+    pub fn lookup_config_by_network_id(&self, network_id: &NetworkId) -> Option<Config> {
         let network = self.db.get_network(network_id).ok()?;
         log::debug!(network_id = network_id.as_str(); "lookup_config_by_network_id: found network");
         let config_name = network.config_name();
         log::debug!(network_id = network_id.as_str(), config = config_name.as_str(); "lookup_config_by_network_id: found config");
-        self.rt
+        self.rt()
             .block_on(async move { self.config_provider.get_config(config_name).await.ok() })
     }
 }
@@ -226,40 +229,38 @@ fn parse_volume_name(volume_name: &str) -> Result<VolumeName<'_>, Error> {
 }
 
 #[derive(Debug)]
-pub(crate) struct CreateNetworkOptions<'a> {
-    pub(crate) network_id: &'a NetworkId,
-    pub(crate) config_name: &'a ConfigName,
+pub struct CreateNetworkOptions<'a> {
+    pub network_id: &'a NetworkId,
+    pub config_name: &'a ConfigName,
 }
 
 #[derive(Debug)]
-pub(crate) struct DeleteNetworkOptions<'a> {
-    pub(crate) network_id: &'a NetworkId,
+pub struct DeleteNetworkOptions<'a> {
+    pub network_id: &'a NetworkId,
 }
 
 #[derive(Debug)]
-pub(crate) struct CreateEndpointOptions<'a> {
-    pub(crate) network_id: &'a NetworkId,
-    #[expect(unused)]
-    pub(crate) endpoint_id: &'a EndpointId,
+pub struct CreateEndpointOptions<'a> {
+    pub network_id: &'a NetworkId,
+    pub endpoint_id: &'a EndpointId,
 }
 
 #[derive(Debug)]
-pub(crate) struct JoinOptions<'a> {
-    pub(crate) network_id: &'a NetworkId,
-    pub(crate) endpoint_id: &'a EndpointId,
+pub struct JoinOptions<'a> {
+    pub network_id: &'a NetworkId,
+    pub endpoint_id: &'a EndpointId,
 }
 
 #[derive(Debug)]
-pub(crate) struct LeaveOptions<'a> {
-    #[expect(unused)]
-    pub(crate) network_id: &'a NetworkId,
-    pub(crate) endpoint_id: &'a EndpointId,
+pub struct LeaveOptions<'a> {
+    pub network_id: &'a NetworkId,
+    pub endpoint_id: &'a EndpointId,
 }
 
 #[derive(Debug)]
-pub(crate) struct CreatedInterface {
-    pub(crate) if_name: String,
-    pub(crate) routes: Vec<CidrAddress>,
+pub struct CreatedInterface {
+    pub if_name: String,
+    pub routes: Vec<CidrAddress>,
 }
 
 #[cfg(test)]

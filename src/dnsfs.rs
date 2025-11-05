@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::service::NetworkPluginService;
 use crate::types::NetworkId;
+use crate::wg::Wg;
 use cache::{FsCache, NewFileEntry};
 
 const ENOENT: i32 = Errno::NOENT.raw_os_error();
@@ -261,17 +262,23 @@ const INODE_MAGIC: u64 = 3;
 // one file. This is implemented only for the `/magic` file; other files will
 // require the more explicit configuration with the `nocopy` option.
 
-struct ResolvConfFS {
-    service: Arc<NetworkPluginService>,
+struct ResolvConfFs<Wg> {
+    service: Arc<NetworkPluginService<Wg>>,
     cache: FsCache,
 }
 
-impl ResolvConfFS {
-    pub fn new(service: Arc<NetworkPluginService>) -> Self {
-        ResolvConfFS {
+impl<Wg> ResolvConfFs<Wg> {
+    pub fn new(service: Arc<NetworkPluginService<Wg>>) -> Self {
+        ResolvConfFs {
             service,
             cache: FsCache::new(),
         }
+    }
+}
+
+impl<Wg> core::fmt::Debug for ResolvConfFs<Wg> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ResolvConfFs").finish()
     }
 }
 
@@ -313,7 +320,7 @@ const fn is_pid_docker_daemon(_pid: u32) -> bool {
     false
 }
 
-impl ResolvConfFS {
+impl<WgImpl: Wg> ResolvConfFs<WgImpl> {
     fn get_magic_file_attr(&self, pid: u32) -> FileAttr {
         let content = self.get_magic_file_content(pid);
         FileAttr {
@@ -344,13 +351,14 @@ impl ResolvConfFS {
     }
 }
 
-impl Filesystem for ResolvConfFS {
+impl<WgImpl: Wg> Filesystem for ResolvConfFs<WgImpl> {
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         // We only deal with UTF-8 filenames
         let Some(name) = name.to_str() else {
             reply.error(ENOENT);
             return;
         };
+        log::debug!(name; "lookup");
         // The only valid parent is the root directory (in all cases) and the
         // "magic" directory (only for the dockerd hack, so it is only expected
         // to occur in that case, and be a regular file in all other cases).
@@ -494,19 +502,67 @@ fn subslice<T>(s: &[T], offset: usize, size: usize) -> &[T] {
     &s[start..end]
 }
 
-pub(crate) fn spawn(
-    service: Arc<NetworkPluginService>,
+#[derive(Debug)]
+pub struct ResolvConfFsSession<WgImpl>
+where
+    WgImpl: Wg,
+{
+    session: fuser::Session<ResolvConfFs<WgImpl>>,
+}
+
+impl<WgImpl> ResolvConfFsSession<WgImpl>
+where
+    WgImpl: Wg + Send + Sync + 'static,
+{
+    pub fn new(
+        service: Arc<NetworkPluginService<WgImpl>>,
+        mountpoint: &Path,
+    ) -> std::io::Result<Self> {
+        let filesystem = ResolvConfFs::new(service);
+        let session = fuser::Session::new(
+            filesystem,
+            mountpoint,
+            &[
+                MountOption::RO,
+                MountOption::FSName("wireguarddns".to_string()),
+                MountOption::AllowRoot,
+            ],
+        )?;
+        Ok(Self { session })
+    }
+
+    pub fn new_panicking(service: Arc<NetworkPluginService<WgImpl>>, mountpoint: &Path) -> Self {
+        let filesystem = ResolvConfFs::new(service);
+        let session = fuser::Session::new(
+            filesystem,
+            mountpoint,
+            &[
+                MountOption::RO,
+                MountOption::FSName("wireguarddns".to_string()),
+                MountOption::AllowRoot,
+            ],
+        )
+        .unwrap();
+        Self { session }
+    }
+
+    pub fn run(&mut self) -> std::io::Result<()> {
+        self.session.run()
+    }
+
+    pub fn spawn(self) -> std::io::Result<fuser::BackgroundSession> {
+        self.session.spawn()
+    }
+}
+
+pub fn spawn<WgImpl>(
+    service: Arc<NetworkPluginService<WgImpl>>,
     mountpoint: &Path,
-) -> std::io::Result<fuser::BackgroundSession> {
+) -> std::io::Result<fuser::BackgroundSession>
+where
+    WgImpl: Wg + Send + Sync + 'static,
+{
     std::fs::create_dir_all(mountpoint)?;
-    let filesystem = ResolvConfFS::new(service);
-    fuser::spawn_mount2(
-        filesystem,
-        mountpoint,
-        &[
-            MountOption::RO,
-            MountOption::FSName("wireguarddns".to_string()),
-            MountOption::AllowRoot,
-        ],
-    )
+    let session = ResolvConfFsSession::new(service, mountpoint)?;
+    session.spawn()
 }

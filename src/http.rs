@@ -372,7 +372,7 @@ fn error_response(
     response
 }
 
-pub(crate) async fn server(
+pub async fn server(
     path: &str,
     service: Arc<NetworkPluginService>,
     mut shutdown: std::pin::Pin<&mut impl Future<Output = ()>>,

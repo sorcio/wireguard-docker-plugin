@@ -15,27 +15,25 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use wireguard_uapi::WgSocket;
 
-use crate::types::EndpointId;
+use crate::{types::EndpointId, wg::Wg};
 
 use super::{Config, WgError};
 
 #[derive(Debug, Error)]
-pub(super) enum WgErrorInner {
+pub(super) enum Error {
     #[error("rtnetlink error: {0}")]
     RequestFailed(#[from] rtnetlink::Error),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("WireGuard connection error")]
     WgSocket(#[from] wireguard_uapi::err::ConnectError),
-    #[error("error reading config: {0}")]
-    ConfigParse(String),
     #[error("WireGuard device configuration error: {0}")]
     SetDevice(#[from] wireguard_uapi::err::SetDeviceError),
     #[error("aborted")]
     Aborted(#[from] tokio::task::JoinError),
 }
 
-pub(crate) struct Wg {
+pub struct WgLinux {
     #[expect(unused)]
     rt_task: JoinHandle<()>,
     rt: rtnetlink::Handle,
@@ -43,10 +41,10 @@ pub(crate) struct Wg {
     watcher: LinkWatcher,
 }
 
-impl Wg {
-    pub(crate) fn new() -> Result<Self, WgError> {
-        let (rt_connection, rt, _) = new_connection().map_err(WgErrorInner::from)?;
-        let wg_socket = Arc::new(Mutex::new(WgSocket::connect().map_err(WgErrorInner::from)?));
+impl Wg for WgLinux {
+    fn new() -> Result<Self, WgError> {
+        let (rt_connection, rt, _) = new_connection().map_err(Error::from)?;
+        let wg_socket = Arc::new(Mutex::new(WgSocket::connect().map_err(Error::from)?));
         let rt_task = tokio::spawn(rt_connection);
         Ok(Self {
             rt_task,
@@ -56,7 +54,7 @@ impl Wg {
         })
     }
 
-    pub(crate) async fn create_interface(
+    async fn create_interface(
         &self,
         endpoint_id: &EndpointId,
         config: Config,
@@ -68,7 +66,7 @@ impl Wg {
             .add(LinkWireguard::new(&if_name).build())
             .execute()
             .await
-            .map_err(WgErrorInner::from)?;
+            .map_err(Error::from)?;
 
         {
             let wg_socket = self.wg_socket.clone();
@@ -79,16 +77,16 @@ impl Wg {
                 wg_socket.set_device(uapi_device)
             })
             .await
-            .map_err(WgErrorInner::from)?
-            .map_err(WgErrorInner::from)?;
+            .map_err(Error::from)?
+            .map_err(Error::from)?;
         }
         set_ifalias(self.rt.clone(), &if_name, ifalias)
             .await
-            .map_err(WgErrorInner::from)?;
+            .map_err(Error::from)?;
         Ok(if_name)
     }
 
-    pub(crate) async fn delete_interface(&self, endpoint_id: &EndpointId) {
+    async fn delete_interface(&self, endpoint_id: &EndpointId) {
         let name = Self::interface_name(endpoint_id);
         if !delete_link_if_found(self.rt.clone(), name.clone())
             .await
@@ -97,7 +95,9 @@ impl Wg {
             self.watcher.mark_for_deletion(name).await;
         }
     }
+}
 
+impl WgLinux {
     fn interface_name(endpoint_id: &EndpointId) -> String {
         let suffix = &endpoint_id.as_str()[0..8];
         format!("wgdkr{suffix}")
@@ -211,9 +211,8 @@ struct LinkWatcher {
 
 impl LinkWatcher {
     pub(crate) fn new() -> Result<Self, WgError> {
-        let (mut rt_connection, rt, mut messages) = new_connection().map_err(WgErrorInner::from)?;
+        let (mut rt_connection, rt, mut messages) = new_connection().map_err(Error::from)?;
 
-        // use netlink_proto::sys::{AsyncSocket, SocketAddr};
         use rtnetlink::proto::sys::{AsyncSocket, SocketAddr};
         let groups = nl_mgrp(rtnetlink::constants::RTMGRP_LINK);
         let addr = SocketAddr::new(0, groups);
@@ -221,7 +220,7 @@ impl LinkWatcher {
             .socket_mut()
             .socket_mut()
             .bind(&addr)
-            .map_err(WgErrorInner::from)?;
+            .map_err(Error::from)?;
         let marked_for_deletion: Arc<AsyncMutex<Vec<String>>> = Default::default();
 
         let messages_task = tokio::spawn({

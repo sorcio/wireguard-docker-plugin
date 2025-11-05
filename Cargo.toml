@@ -4,6 +4,25 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "wireguard-docker-plugin"
+test = false
+
+[[bin]]
+# Used by integration tests
+name = "magic_hack"
+path = "testbins/magic_hack.rs"
+
+[[bin]]
+# Used by integration tests
+name = "read_in_container"
+path = "testbins/read_in_container.rs"
+
+[[bin]]
+# Used by integration tests
+name = "isolated_dnsfs"
+path = "testbins/isolated_dnsfs.rs"
+
 [features]
 default = []
 disable-dockerd-hack = []
@@ -17,19 +36,32 @@ pin-project-lite = "0.2.14"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 hyper-util = { version = "0.1.7", features = ["http1", "server", "tokio"] }
-rustix = { version = "0.38.35", features = ["fs", "thread"] }
-thiserror = "1.0.63"
+rustix = { version = "1.1.2", features = ["fs", "mount", "process", "thread"] }
+thiserror = "2.0.17"
 ini_core = "0.2.0"
 base64 = { version = "0.22.1", default-features = false }
 futures-util = { version = "0.3.30", default-features = false }
 log = { version = "0.4.22", features = ["kv", "release_max_level_info", "std"] }
 humantime = "2.1.0"
+cfg-if = "1.0.4"
+
+[dev-dependencies]
+tempfile = "3.8"
+libtest-mimic = "0.8.1"
+small_ctor = "0.1.2"
 
 [target."cfg(target_os = \"linux\")".dependencies]
-fuser = { git = "https://github.com/sorcio/fuser", version = "0.16.0", rev = "25720a06cbc143264d93200f78d2635fa118235c" }
+fuser = { git = "https://github.com/cberner/fuser", version = "0.16.0", rev = "6d4725e58bd3dd4f32d58f995ee67d6ba5b09591" }
 rtnetlink = { git = "https://github.com/rust-netlink/rtnetlink", rev = "5fca904b11ba2535fdfac30bf729aa8c10c34c0d", version = "0.14.1" }
 wireguard-uapi = "3.0.0"
+# These should only be for test binaries, consider splitting into separate crates
+container_helpers = { path = "./container_helpers" }
+tempfile = "3.8"
 
 [profile.release]
 lto = "thin"
 opt-level = "s"
+
+[workspace]
+members = [".", "container_helpers"]
+default-members = ["."]

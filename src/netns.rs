@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 const DEFAULT_NETNS_PATH: &str = "/parent-netns";
 
 #[derive(Debug, Clone)]
-pub(crate) struct NetworkNamespaceOptions {
+pub struct NetworkNamespaceOptions {
     skip_if_not_exists: bool,
     path: Option<PathBuf>,
 }
@@ -37,7 +37,7 @@ impl NetworkNamespaceOptions {
         }
     }
 
-    pub(crate) fn from_env() -> Self {
+    pub fn from_env() -> Self {
         use std::env;
         match env::var_os("NETNS") {
             Some(path) => {
@@ -72,9 +72,9 @@ impl Default for NetworkNamespaceOptions {
     }
 }
 
-pub(crate) struct Error;
+pub struct Error;
 
-pub(crate) fn enter_net_namespace(options: &NetworkNamespaceOptions) -> Result<(), Error> {
+pub fn enter_net_namespace(options: &NetworkNamespaceOptions) -> Result<(), Error> {
     use rustix::thread::{move_into_link_name_space, LinkNameSpaceType};
     use std::os::fd::AsFd;
 
