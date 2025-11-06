@@ -68,6 +68,7 @@ impl Wg for WgLinux {
             .await
             .map_err(Error::from)?;
 
+        let mtu = config.mtu;
         {
             let wg_socket = self.wg_socket.clone();
             let if_name = if_name.clone();
@@ -79,6 +80,11 @@ impl Wg for WgLinux {
             .await
             .map_err(Error::from)?
             .map_err(Error::from)?;
+        }
+        if let Some(mtu) = mtu {
+            set_mtu(self.rt.clone(), &if_name, mtu)
+                .await
+                .map_err(Error::from)?;
         }
         set_ifalias(self.rt.clone(), &if_name, ifalias)
             .await
@@ -144,6 +150,20 @@ async fn set_ifalias(
     message
         .attributes
         .push(LinkAttribute::IfAlias(alias.to_string()));
+    let request = handle.link().set(message);
+    request.execute().await
+}
+
+async fn set_mtu(
+    handle: rtnetlink::Handle,
+    if_name: &str,
+    mtu: u32,
+) -> Result<(), rtnetlink::Error> {
+    let mut message = LinkMessage::default();
+    message
+        .attributes
+        .push(LinkAttribute::IfName(if_name.to_string()));
+    message.attributes.push(LinkAttribute::Mtu(mtu));
     let request = handle.link().set(message);
     request.execute().await
 }

@@ -38,6 +38,7 @@ pub struct Config {
     pub(super) private_key: Key,
     pub(super) listen_port: Option<u16>,
     pub(super) fw_mark: Option<u32>,
+    pub(super) mtu: Option<u32>,
     pub(super) address: Option<CidrAddress>,
     pub(super) dns: Vec<std::net::IpAddr>,
     pub(super) peers: Vec<Peer>,
@@ -139,6 +140,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
     let mut private_key = None;
     let mut listen_port = None;
     let mut fw_mark = None;
+    let mut mtu = None;
     let mut address = None;
     let mut dns = Vec::new();
     let mut peers = Vec::new();
@@ -224,6 +226,14 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                         ))
                     })?;
                     fw_mark = Some(mark);
+                }
+                (Section::Interface, "MTU") => {
+                    let parsed_mtu: u32 = value.parse().map_err(|_| {
+                        ErrorInner::ConfigParse(format!(
+                            "line {line}: MTU should be a valid integer"
+                        ))
+                    })?;
+                    mtu = Some(parsed_mtu);
                 }
                 (Section::Interface, "Address") => {
                     let addr: CidrAddress = value.parse().map_err(|_| {
@@ -317,6 +327,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
             .ok_or_else(|| ErrorInner::ConfigParse("PrivateKey is required".to_string()))?,
         listen_port,
         fw_mark,
+        mtu,
         address,
         dns,
         peers,
@@ -472,6 +483,7 @@ AllowedIPs = 0.0.0.0/0
             private_key: Key([0u8; 32]),
             listen_port: None,
             fw_mark: None,
+            mtu: None,
             address: None,
             dns: vec![],
             peers: vec![],
@@ -485,6 +497,7 @@ AllowedIPs = 0.0.0.0/0
             private_key: Key([0u8; 32]),
             listen_port: None,
             fw_mark: None,
+            mtu: None,
             address: None,
             dns: vec!["10.0.0.1".parse().unwrap()],
             peers: vec![],
@@ -493,11 +506,55 @@ AllowedIPs = 0.0.0.0/0
     }
 
     #[test]
+    fn test_parse_mtu_present() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+MTU = 1420
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+    "#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.mtu, Some(1420));
+    }
+
+    #[test]
+    fn test_parse_mtu_absent() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+    "#;
+        let config = parse_config(config_text).unwrap();
+        assert!(config.mtu.is_none());
+    }
+
+    #[test]
+    fn test_parse_mtu_invalid() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+MTU = notanumber
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+    "#;
+        assert!(parse_config(config_text).is_err());
+    }
+
+    #[test]
     fn test_format_resolv_conf_multiple() {
         let config = Config {
             private_key: Key([0u8; 32]),
             listen_port: None,
             fw_mark: None,
+            mtu: None,
             address: None,
             dns: vec![
                 "10.0.0.1".parse().unwrap(),
