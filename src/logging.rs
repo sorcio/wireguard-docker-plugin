@@ -1,8 +1,9 @@
-use std::io::Write;
+use std::{io::Write, sync::Mutex};
 
 struct Logger<Writer> {
     max_level: log::LevelFilter,
     output: Writer,
+    lock: Mutex<()>,
 }
 
 impl Logger<()> {
@@ -10,6 +11,7 @@ impl Logger<()> {
         Self {
             max_level: log::LevelFilter::Off,
             output: (),
+            lock: Mutex::new(()),
         }
     }
 }
@@ -39,6 +41,7 @@ impl<T> Logger<T> {
         Logger {
             max_level: self.max_level,
             output: writer,
+            lock: self.lock,
         }
     }
 }
@@ -62,10 +65,14 @@ where
     for<'a> &'a T: Write,
 {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= self.max_level && metadata.target().starts_with(module_path!())
+        let crate_root = module_path!().split("::").next().unwrap_or_default();
+        let show_all = cfg!(debug_assertions);
+        metadata.level() <= self.max_level
+            && (show_all || metadata.target().starts_with(crate_root))
     }
 
     fn log(&self, record: &log::Record) {
+        let _guard = self.lock.lock().unwrap();
         if !self.enabled(record.metadata()) {
             return;
         }
@@ -84,9 +91,10 @@ where
         }
         write!(
             &self.output,
-            "{timestamp} {level} {args}",
+            "{timestamp} {level} {module} {args}",
             timestamp = timestamp,
             level = record.level(),
+            module = record.module_path().unwrap_or_default(),
             args = record.args(),
         )
         .expect(FAILED_WRITE_MSG);
