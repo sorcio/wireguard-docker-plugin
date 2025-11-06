@@ -525,7 +525,6 @@ where
             &[
                 MountOption::RO,
                 MountOption::FSName("wireguarddns".to_string()),
-                MountOption::AllowRoot,
             ],
         )?;
         Ok(Self { session })
