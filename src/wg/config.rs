@@ -2,7 +2,7 @@ use std::{net::SocketAddr, num::NonZeroU16, path::PathBuf};
 
 use crate::types::ConfigName;
 
-use super::{WgError, WgErrorInner};
+use super::{ErrorInner, WgError};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Key([u8; 32]);
@@ -34,26 +34,39 @@ impl std::str::FromStr for Key {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Config {
+pub struct Config {
     pub(super) private_key: Key,
     pub(super) listen_port: Option<u16>,
     pub(super) fw_mark: Option<u32>,
     pub(super) address: Option<CidrAddress>,
+    pub(super) dns: Vec<std::net::IpAddr>,
     pub(super) peers: Vec<Peer>,
 }
 
 impl Config {
-    pub(crate) fn address(&self) -> Option<&CidrAddress> {
+    pub fn address(&self) -> Option<&CidrAddress> {
         self.address.as_ref()
     }
 
-    pub(crate) fn routes(&self) -> impl Iterator<Item = &CidrAddress> {
+    pub fn routes(&self) -> impl Iterator<Item = &CidrAddress> {
         self.peers.iter().flat_map(|peer| peer.allowed_ips.iter())
+    }
+
+    pub fn format_resolv_conf(&self) -> String {
+        if self.dns.is_empty() {
+            String::new()
+        } else {
+            self.dns
+                .iter()
+                .map(|ip| format!("nameserver {ip}\n"))
+                .collect::<Vec<_>>()
+                .join("")
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Peer {
+pub struct Peer {
     pub(super) public_key: Key,
     pub(super) preshared_key: Option<Key>,
     pub(super) endpoint: Option<SocketAddr>,
@@ -62,17 +75,17 @@ pub(crate) struct Peer {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CidrAddress {
+pub struct CidrAddress {
     ip: std::net::IpAddr,
     cidr: u8,
 }
 
 impl CidrAddress {
-    pub(crate) fn ip(&self) -> &std::net::IpAddr {
+    pub fn ip(&self) -> &std::net::IpAddr {
         &self.ip
     }
 
-    pub(crate) fn cidr(&self) -> u8 {
+    pub fn cidr(&self) -> u8 {
         self.cidr
     }
 }
@@ -104,7 +117,7 @@ impl std::str::FromStr for CidrAddress {
 async fn load_config_from_path(path: impl AsRef<std::path::Path>) -> Result<Config, WgError> {
     let text = tokio::fs::read_to_string(path.as_ref())
         .await
-        .map_err(WgErrorInner::from)?;
+        .map_err(ErrorInner::from)?;
 
     parse_config(&text)
 }
@@ -127,6 +140,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
     let mut listen_port = None;
     let mut fw_mark = None;
     let mut address = None;
+    let mut dns = Vec::new();
     let mut peers = Vec::new();
     let mut public_key = None;
     let mut preshared_key = None;
@@ -139,7 +153,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
         let line = i + 1;
         match item {
             ini_core::Item::Error(s) => {
-                return Err(WgErrorInner::ConfigParse(format!("line {line}: {s}")).into());
+                return Err(ErrorInner::ConfigParse(format!("line {line}: {s}")).into());
             }
             ini_core::Item::Section(section_name) => match section_name {
                 "Interface" => current_section = Section::Interface,
@@ -148,7 +162,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                     current_section = Section::Peer;
                 }
                 _ => {
-                    return Err(WgErrorInner::ConfigParse(format!(
+                    return Err(ErrorInner::ConfigParse(format!(
                         "line {line}: unexpected section {section_name}"
                     ))
                     .into())
@@ -158,7 +172,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                 if let Section::Peer = current_section {
                     peers.push(Peer {
                         public_key: public_key.ok_or_else(|| {
-                            WgErrorInner::ConfigParse(format!(
+                            ErrorInner::ConfigParse(format!(
                                 "line {peer_section_line}: Peer section missing PublicKey"
                             ))
                         })?,
@@ -178,7 +192,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
             ini_core::Item::Property(property, Some(value)) => match (current_section, property) {
                 (Section::Interface, "PrivateKey") => {
                     let key: Key = value.parse().map_err(|_| {
-                        WgErrorInner::ConfigParse(format!(
+                        ErrorInner::ConfigParse(format!(
                             "line {line}: key should be a valid 256-bit base64 string"
                         ))
                     })?;
@@ -187,7 +201,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                 (Section::Interface, "ListenPort") => {
                     listen_port = if let Some(hex) = value.strip_prefix("0x") {
                         let port: u16 = u16::from_str_radix(hex, 16).map_err(|_| {
-                            WgErrorInner::ConfigParse(format!(
+                            ErrorInner::ConfigParse(format!(
                                 "line {line}: ListenPort should be a valid port number"
                             ))
                         })?;
@@ -196,7 +210,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                         None
                     } else {
                         let port: u16 = value.parse().map_err(|_| {
-                            WgErrorInner::ConfigParse(format!(
+                            ErrorInner::ConfigParse(format!(
                                 "line {line}: ListenPort should be a valid port number"
                             ))
                         })?;
@@ -205,7 +219,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                 }
                 (Section::Interface, "FwMark") => {
                     let mark: u32 = value.parse().map_err(|_| {
-                        WgErrorInner::ConfigParse(format!(
+                        ErrorInner::ConfigParse(format!(
                             "line {line}: FwMark should be a valid integer"
                         ))
                     })?;
@@ -213,15 +227,30 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                 }
                 (Section::Interface, "Address") => {
                     let addr: CidrAddress = value.parse().map_err(|_| {
-                        WgErrorInner::ConfigParse(format!(
+                        ErrorInner::ConfigParse(format!(
                             "line {line}: Address should be a valid address/cidr string"
                         ))
                     })?;
                     address = Some(addr);
                 }
+                (Section::Interface, "DNS") => {
+                    dns.extend(
+                        value
+                            .split(|c: char| c.is_whitespace() || c == ',')
+                            .filter(|s| !s.is_empty())
+                            .map(|s| {
+                                s.parse::<std::net::IpAddr>().map_err(|_| {
+                                    ErrorInner::ConfigParse(format!(
+                                        "line {line}: DNS should be a valid IP address"
+                                    ))
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    );
+                }
                 (Section::Peer, "PublicKey") => {
                     let key: Key = value.parse().map_err(|_| {
-                        WgErrorInner::ConfigParse(format!(
+                        ErrorInner::ConfigParse(format!(
                             "line {line}: PublicKey should be a valid 256-bit base64 string"
                         ))
                     })?;
@@ -229,7 +258,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                 }
                 (Section::Peer, "PresharedKey") => {
                     let key: Key = value.parse().map_err(|_| {
-                        WgErrorInner::ConfigParse(format!(
+                        ErrorInner::ConfigParse(format!(
                             "line {line}: PresharedKey should be a valid 256-bit base64 string"
                         ))
                     })?;
@@ -237,7 +266,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                 }
                 (Section::Peer, "Endpoint") => {
                     endpoint = Some(value.parse().map_err(|_| {
-                        WgErrorInner::ConfigParse(format!(
+                        ErrorInner::ConfigParse(format!(
                             "line {line}: Endpoint should be a valid address:port string"
                         ))
                     })?);
@@ -248,7 +277,7 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                             .split(',')
                             .map(|s| {
                                 s.parse().map_err(|_| {
-                                    WgErrorInner::ConfigParse(format!(
+                                    ErrorInner::ConfigParse(format!(
                                         "line {line}: AllowedIPs should be a valid CIDR string"
                                     ))
                                 })
@@ -262,21 +291,21 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
                     } else if value == "off" {
                         None
                     } else {
-                        return Err(WgErrorInner::ConfigParse(format!(
+                        return Err(ErrorInner::ConfigParse(format!(
                             "line {line}: PersistentKeepalive should be a valid integer"
                         ))
                         .into());
                     };
                 }
                 (_, _) => {
-                    return Err(WgErrorInner::ConfigParse(format!(
+                    return Err(ErrorInner::ConfigParse(format!(
                         "line {line}: unexpected property {property}"
                     ))
                     .into())
                 }
             },
             ini_core::Item::Property(property, None) => {
-                return Err(WgErrorInner::ConfigParse(format!("line {line}: {property}")).into())
+                return Err(ErrorInner::ConfigParse(format!("line {line}: {property}")).into())
             }
             ini_core::Item::Comment(_) => {}
             ini_core::Item::Blank => {}
@@ -285,15 +314,16 @@ fn parse_config(text: &str) -> Result<Config, WgError> {
 
     Ok(Config {
         private_key: private_key
-            .ok_or_else(|| WgErrorInner::ConfigParse("PrivateKey is required".to_string()))?,
+            .ok_or_else(|| ErrorInner::ConfigParse("PrivateKey is required".to_string()))?,
         listen_port,
         fw_mark,
         address,
+        dns,
         peers,
     })
 }
 
-pub(crate) struct ConfigProvider {
+pub struct ConfigProvider {
     inner: ConfigProviderInner,
 }
 
@@ -307,7 +337,7 @@ impl ConfigProvider {
     pub async fn get_config(&self, name: &ConfigName) -> Result<Config, WgError> {
         match &self.inner {
             ConfigProviderInner::File { base_path } => {
-                let path = base_path.join(name).with_extension("conf");
+                let path = base_path.join(name).with_added_extension("conf");
                 load_config_from_path(path).await
             }
         }
@@ -316,4 +346,169 @@ impl ConfigProvider {
 
 enum ConfigProviderInner {
     File { base_path: PathBuf },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_dns_comma_separated() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1, 10.0.0.2
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "10.0.0.2");
+    }
+
+    #[test]
+    fn test_parse_dns_space_separated() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1 10.0.0.2
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "10.0.0.2");
+    }
+
+    #[test]
+    fn test_parse_dns_mixed_separators() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1, 10.0.0.2 10.0.0.3
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 3);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "10.0.0.2");
+        assert_eq!(config.dns[2].to_string(), "10.0.0.3");
+    }
+
+    #[test]
+    fn test_parse_dns_ipv6() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 2001:db8::1, 2001:db8::2
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "2001:db8::1");
+        assert_eq!(config.dns[1].to_string(), "2001:db8::2");
+    }
+
+    #[test]
+    fn test_parse_dns_mixed_ipv4_ipv6() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = 10.0.0.1, 2001:db8::1
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 2);
+        assert_eq!(config.dns[0].to_string(), "10.0.0.1");
+        assert_eq!(config.dns[1].to_string(), "2001:db8::1");
+    }
+
+    #[test]
+    fn test_parse_dns_no_dns() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        let config = parse_config(config_text).unwrap();
+        assert_eq!(config.dns.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_dns_invalid_ip() {
+        let config_text = r#"
+[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+DNS = not-an-ip
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+AllowedIPs = 0.0.0.0/0
+"#;
+        assert!(parse_config(config_text).is_err());
+    }
+
+    #[test]
+    fn test_format_resolv_conf_empty() {
+        let config = Config {
+            private_key: Key([0u8; 32]),
+            listen_port: None,
+            fw_mark: None,
+            address: None,
+            dns: vec![],
+            peers: vec![],
+        };
+        assert_eq!(config.format_resolv_conf(), "");
+    }
+
+    #[test]
+    fn test_format_resolv_conf_single() {
+        let config = Config {
+            private_key: Key([0u8; 32]),
+            listen_port: None,
+            fw_mark: None,
+            address: None,
+            dns: vec!["10.0.0.1".parse().unwrap()],
+            peers: vec![],
+        };
+        assert_eq!(config.format_resolv_conf(), "nameserver 10.0.0.1\n");
+    }
+
+    #[test]
+    fn test_format_resolv_conf_multiple() {
+        let config = Config {
+            private_key: Key([0u8; 32]),
+            listen_port: None,
+            fw_mark: None,
+            address: None,
+            dns: vec![
+                "10.0.0.1".parse().unwrap(),
+                "10.0.0.2".parse().unwrap(),
+                "2001:db8::1".parse().unwrap(),
+            ],
+            peers: vec![],
+        };
+        assert_eq!(
+            config.format_resolv_conf(),
+            "nameserver 10.0.0.1\nnameserver 10.0.0.2\nnameserver 2001:db8::1\n"
+        );
+    }
 }

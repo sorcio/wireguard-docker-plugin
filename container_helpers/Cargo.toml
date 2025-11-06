@@ -1,0 +1,10 @@
+[package]
+name = "container_helpers"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror = "2.0.17"
+
+[target."cfg(target_os = \"linux\")".dependencies]
+rustix = { version = "1.1.2", features = ["fs", "mount", "process", "thread"] }

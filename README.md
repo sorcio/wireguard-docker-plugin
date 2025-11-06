@@ -31,9 +31,10 @@ an identifier, and will need to be specified when creating a network.
 
 The configuration file should contain the WireGuard configuration in the
 format specified by the [`wg` tool](https://git.zx2c4.com/wireguard-tools/about/src/man/wg.8),
-with one addition: the `Interface` section can optionally include an `Address`
+with some additions: the `Interface` section can optionally include an `Address`
 line with at most one IPv4 address, and at most one IPv6 address, optionally
-followed by a CIDR mask.
+followed by a CIDR mask. It can also include a `DNS` line with one or more
+DNS servers (comma or space-separated).
 
 Here is an example configuration file:
 
@@ -42,6 +43,7 @@ Here is an example configuration file:
 PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
 ListenPort = 51820
 Address = 10.192.124.1/24
+DNS = 10.192.124.1, 10.192.124.2
 
 [Peer]
 PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
@@ -53,6 +55,9 @@ Note that the WireGuard connection will use host networking, so the
 `ListenPort` and `Endpoint` lines refer to configuration on the host.
 On the other hand, the `Address` and `AllowedIPs` lines will apply to
 the container.
+
+Valid configuration file names end with `.conf`, only contain alphanumeric
+characters, hyphens, and underscores, and start with an alphanumeric character.
 
 ### Creating a network
 
@@ -78,6 +83,64 @@ You can also use IPAM to allocate addresses dynamically. In this case,
 the `Address` line in the configuration file should be omitted. It's up
 to you to make sure that the addresses allocated by Docker are compatible
 with the WireGuard configuration.
+
+### DNS configuration
+
+If the WireGuard configuration includes DNS servers, you can use a volume to
+provide them to the container. The easiest way to do that is to use the
+`wireguard-dns` magic volume provided by this plugin:
+
+```shell
+docker run \
+  --network mynet \
+  -v wireguard-dns:/etc/resolv.conf \
+  myimage
+```
+
+This will work in most cases. In case the automatic detection does not work, or
+if you need to specify the configuration file to take DNS servers from, you can
+use the explicit form. The `wireguard-dns-<config name>` volume is created on
+demand, so you don't need to create it manually, and you can just mount it:
+
+```shell
+docker run \
+  --network mynet \
+  -v wireguard-dns-mynet-1:/etc/resolv.conf:ro,nocopy \
+  myimage
+```
+
+The plugin will automatically populate the `resolv.conf` file with the DNS
+servers from the configuration when the container connects to the network.
+Note that the volume name uses the configuration name (e.g., `mynet-1`), not
+the Docker network name (e.g., `mynet`).
+
+> [!NOTE]
+> In case something goes wrong with the `wireguard-dns` or
+> `wireguard-dns-<config name>` volumes, no error is reported. Instead, the
+> resulting `resolv.conf` file will be empty. Common causes:
+> - There is no WireGuard configuration file with the given name (see Configuration above)
+> - The WireGuard configuration doesn't include a `DNS` line
+> - For `wireguard-dns`, the automatic network detection failed (try the explicit form), or the container is not attached to a network managed by the plugin
+
+<details>
+<summary>How does the magic volume work?</summary>
+
+When `wireguard-docker-plugin` creates a network interface, it attaches an
+identifier to the interface `ifalias` attribute.
+
+Whenever a process reads the mounted `resolv.conf` magic file, the plugin,
+through a FUSE filesystem, is able to look up the PID of the process, inspect
+its network namespace, check for an interface called `wg0`, read its ifalias,
+and map back the identifier to the WireGuard configuration name.
+
+This can fail in unusual setups, such as when `ifalias` is altered by another
+tool, not supported by the kernel; or `wg0` is not the desired interface; or
+when the plugin is not allowed to inspect a containerized process's network
+namespace.
+
+In these cases, use the explicit `wireguard-dns-<config name>` form, which will
+provide a simple mapping to a more regular file in the FUSE filesystem.
+</details>
 
 ## Limitations
 
@@ -107,18 +170,6 @@ Here are some limitations:
 - The `MTU` option from `wg-quick` configuration files is not supported, but
   will eventually be. There is no way to set the MTU for the interface
   at the moment.
-
-- The `DNS` option from `wg-quick` configuration is not supported.
-  Additionally, Docker DNS does not support DNS servers that are only
-  accessible through the WireGuard interface. This is a limitation of
-  Docker.
-
-  If you need to use a DNS server in the container that is only accessible
-  through the WireGuard interface, you will need a workaround, such as
-  overwriting or bind-mounting `/etc/resolv.conf` in the container.
-
-  I'm considering a quality-of-life feature to simplify this kind of
-  configuration, but it's not implemented yet.
 
 - The plugin is only for Linux.
 

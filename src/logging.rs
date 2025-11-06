@@ -99,7 +99,10 @@ where
     }
 }
 
-pub(crate) fn configure_logging() -> Result<(), ()> {
+#[derive(Debug)]
+pub struct Error;
+
+pub fn configure_logging() -> Result<(), Error> {
     let verbose = std::env::var("DEBUG")
         .map(|v| v.trim() == "1")
         .unwrap_or(false);
@@ -117,9 +120,9 @@ pub(crate) fn configure_logging() -> Result<(), ()> {
     match std::env::var_os("LOGFILE") {
         Some(path) => {
             if path == "stderr" {
-                logger.output(std::io::stderr()).init().map_err(|_| ())
+                logger.output(std::io::stderr()).init().map_err(|_| Error)
             } else if path == "stdout" {
-                logger.output(std::io::stdout()).init().map_err(|_| ())
+                logger.output(std::io::stdout()).init().map_err(|_| Error)
             } else {
                 let file = match std::fs::OpenOptions::new()
                     .create(true)
@@ -129,12 +132,12 @@ pub(crate) fn configure_logging() -> Result<(), ()> {
                     Ok(file) => file,
                     Err(e) => {
                         eprintln!("Failed to open log file: {}", e);
-                        return Err(());
+                        return Err(Error);
                     }
                 };
-                logger.output(file).init().map_err(|_| ())
+                logger.output(file).init().map_err(|_| Error)
             }
         }
-        None => logger.output(std::io::stderr()).init().map_err(|_| ()),
+        None => logger.output(std::io::stderr()).init().map_err(|_| Error),
     }
 }

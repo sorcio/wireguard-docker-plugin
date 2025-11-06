@@ -1,0 +1,62 @@
+{
+  "name": "wireguard",
+  "description": "WireGuard plugin for Docker",
+  "entrypoint": ["/wireguard-docker-plugin"],
+  "network": { "type": "none" },
+  "env": [
+    {
+      "name": "DEBUG",
+      "description": "Enable debug mode",
+      "settable": ["value"],
+      "value": "0"
+    },
+    {
+      "name": "LOGFILE",
+      "description": "Log file",
+      "settable": ["value"],
+      "value": null
+    }
+  ],
+  "mounts": [
+    {
+      "name": "conf",
+      "destination": "/wireguard_conf",
+      "source": "/var/lib/docker/plugins/wireguard/conf",
+      "options": ["bind"],
+      "settable": ["source"]
+    },
+    {
+      "name": "state",
+      "destination": "/wireguard_db",
+      "source": "/var/lib/docker/plugins/wireguard/db",
+      "options": ["bind"],
+      "settable": ["source"]
+    },
+    {
+      "name": "parentns",
+      "destination": "/parent-netns",
+      "source": "/proc/1/ns/net",
+      "options": ["bind"]
+    }
+  ],
+  "pidhost": true,
+  "interface": {
+    "types": ["docker.networkdriver/1.0", "docker.volumedriver/1.0"],
+    "socket": "wireguard.sock"
+  },
+  "propagatedMount": "/mounts",
+  "linux": {
+    "capabilities": ["CAP_SYS_ADMIN", "CAP_NET_ADMIN"],
+    "devices": [
+        {
+            "path": "/dev/fuse",
+            "type": "c",
+            "major": 10,
+            "minor": 229,
+            "fileMode": 438,
+            "uid": 0,
+            "gid": 0
+        }
+    ]
+  }
+}

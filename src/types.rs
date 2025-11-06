@@ -40,19 +40,25 @@ macro_rules! identifier_newtype {
         impl<'a> TryFrom<&'a str> for &'a $ref_name {
             type Error = $crate::errors::ValidationError;
             fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-                if value.is_empty() {
-                    Err($crate::errors::ValidationError("Identifier cannot be empty"))
-                } else if value
-                    .chars()
-                    .any(|c| !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_')
-                {
-                    Err($crate::errors::ValidationError(
-                        "Identifier must consist only of [a-zA-Z0-9_.-] characters",
-                    ))
+                if let Some(first_char) = value.chars().next() {
+                    if !first_char.is_ascii_alphanumeric() {
+                        Err($crate::errors::ValidationError(
+                            "Identifier must start with an alphanumeric character",
+                        ))
+                    } else if value
+                        .chars()
+                        .any(|c| !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_')
+                    {
+                        Err($crate::errors::ValidationError(
+                            "Identifier must consist only of [a-zA-Z0-9_.-] characters",
+                        ))
+                    } else {
+                        // SAFETY: $ref_name is a repr(transparent) on str
+                        let new_ref = unsafe { std::mem::transmute::<&str, &$ref_name>(value) };
+                        Ok(new_ref)
+                    }
                 } else {
-                    // SAFETY: $ref_name is a repr(transparent) on str
-                    let new_ref = unsafe { std::mem::transmute::<&str, &$ref_name>(value) };
-                    Ok(new_ref)
+                    Err($crate::errors::ValidationError("Identifier cannot be empty"))
                 }
             }
         }
@@ -61,6 +67,14 @@ macro_rules! identifier_newtype {
             fn borrow(&self) -> &$ref_name {
                 // SAFETY: $ref_name is a repr(transparent) on str
                 unsafe { std::mem::transmute::<&str, &$ref_name>(self.0.borrow()) }
+            }
+        }
+
+        impl ::std::ops::Deref for $owned_name {
+            type Target = $ref_name;
+
+            fn deref(&self) -> &Self::Target {
+                ::std::borrow::Borrow::<$ref_name>::borrow(self)
             }
         }
 
@@ -75,9 +89,8 @@ macro_rules! identifier_newtype {
 
 /////////////////
 
-identifier_newtype!(pub(crate) &NetworkId, NetworkIdOwned);
+identifier_newtype!(pub &NetworkId, NetworkIdOwned);
 
-#[cfg(test)]
 impl NetworkId {
     pub fn as_str(&self) -> &str {
         &self.0
@@ -90,7 +103,7 @@ impl AsRef<Path> for NetworkId {
     }
 }
 
-identifier_newtype!(pub(crate) &EndpointId, EndpointIdOwned);
+identifier_newtype!(pub &EndpointId, EndpointIdOwned);
 
 impl EndpointId {
     pub fn as_str(&self) -> &str {
@@ -98,9 +111,8 @@ impl EndpointId {
     }
 }
 
-identifier_newtype!(pub(crate) &ConfigName, ConfigNameOwned);
+identifier_newtype!(pub &ConfigName, ConfigNameOwned);
 
-#[cfg(test)]
 impl ConfigName {
     pub fn as_str(&self) -> &str {
         &self.0
@@ -159,6 +171,18 @@ mod identifier_tests {
         assert!(<&TestId>::try_from("foo/bar").is_err());
         assert!(<&TestId>::try_from("/foo").is_err());
         assert!(<&TestId>::try_from("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn dont_accept_non_alphanumeric_first_char() {
+        assert!(<&TestId>::try_from(".hidden").is_err());
+        assert!(<&TestId>::try_from("_private").is_err());
+        assert!(<&TestId>::try_from("-test").is_err());
+        // But these are valid
+        assert!(<&TestId>::try_from("a.test").is_ok());
+        assert!(<&TestId>::try_from("a_test").is_ok());
+        assert!(<&TestId>::try_from("a-test").is_ok());
+        assert!(<&TestId>::try_from("1test").is_ok());
     }
 
     #[test]

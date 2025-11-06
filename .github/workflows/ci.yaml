@@ -16,7 +16,7 @@ env:
 jobs:
   build_and_test:
     name: Build and test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +27,11 @@ jobs:
         target:
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-musl
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -34,6 +39,7 @@ jobs:
           rustup default ${{ matrix.toolchain }}
           rustup component add clippy --toolchain ${{ matrix.toolchain }}
           rustup target add ${{ matrix.target }} --toolchain ${{ matrix.toolchain }}
+      - run: sudo apt-get update
       - run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
@@ -41,5 +47,6 @@ jobs:
           key: ${{ matrix.target }}
       - run: cargo clippy --verbose --target ${{ matrix.target }}
       - run: cargo build --verbose --target ${{ matrix.target }}
+      # Some integration tests need to mess with user namespaces
+      - run: sudo sysctl --ignore --write kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo test --verbose --target ${{ matrix.target }}
-        if: (startsWith(matrix.target, 'x86_64-') && runner.arch == 'X64') || (startsWith(matrix.target, 'aarch64-') && runner.arch == 'ARM64')

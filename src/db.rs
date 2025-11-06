@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    path::{Path, PathBuf},
-};
+use std::{borrow::Cow, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -62,8 +59,7 @@ impl Db {
     }
 }
 
-pub(crate) fn open<P: AsRef<Path>>(path: P) -> Result<Db, std::io::Error> {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path)?;
-    Ok(Db::new(path.to_owned()))
+pub(crate) fn open(path: PathBuf) -> Result<Db, std::io::Error> {
+    std::fs::create_dir_all(&path)?;
+    Ok(Db::new(path))
 }

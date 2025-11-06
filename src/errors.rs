@@ -1,12 +1,13 @@
 use crate::wg::WgError;
 
 #[derive(Debug)]
-pub(crate) enum Error {
+pub enum Error {
     Hyper(hyper::Error),
     SerdeJson(serde_json::Error),
     Io(std::io::Error),
     Wg(WgError),
     MissingConfig(Vec<&'static str>),
+    InvalidInput(String),
     Abort,
 }
 
@@ -41,7 +42,7 @@ impl From<WgError> for Error {
 }
 
 #[derive(Debug)]
-pub(crate) struct ValidationError(pub(crate) &'static str);
+pub struct ValidationError(pub &'static str);
 
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
