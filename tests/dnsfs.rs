@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 mod common;
-use std::{os::unix::fs::MetadataExt, path::Path};
+use std::os::unix::fs::MetadataExt;
 
 use common::{config_content, expected_content, TestFuseMount};
 use rustix::path::Arg;
@@ -360,21 +360,15 @@ async fn test_magic_file_works() {
     // interface, and read the contents of the specified file (the magic file,
     // in this test).
     let subprocess_path = env!("CARGO_BIN_EXE_read_in_container");
-    let exe_name = <_ as AsRef<Path>>::as_ref(subprocess_path)
-        .file_name()
-        .unwrap();
     let rootfs = tempfile::tempdir().expect("Failed to create temporary directory");
     let rootfs_path = rootfs.path();
-    std::fs::copy(subprocess_path, rootfs_path.join(exe_name)).expect("Failed to copy executable");
     std::fs::create_dir(rootfs_path.join("mnt")).expect("Failed to create /mnt directory");
-
-    let mut container = std::process::Command::new(rootfs_path.join(exe_name));
-    container
+    let output = std::process::Command::new(subprocess_path)
+        .arg(rootfs_path)
         .arg(fuse_path)
         .arg(fake_network_id)
-        .arg("/mnt/magic");
-
-    let output = container.expect_output();
+        .arg("/mnt/magic")
+        .expect_output();
     assert_eq!(
         output.stdout.to_string_lossy(),
         expected_content::MULTIPLE_DNS
@@ -402,21 +396,15 @@ async fn test_resolv_conf_from_container_works() {
     // interface, and read the contents of the specified file (the resolv.conf
     // file).
     let subprocess_path = env!("CARGO_BIN_EXE_read_in_container");
-    let exe_name = <_ as AsRef<Path>>::as_ref(subprocess_path)
-        .file_name()
-        .unwrap();
     let rootfs = tempfile::tempdir().expect("Failed to create temporary directory");
     let rootfs_path = rootfs.path();
-    std::fs::copy(subprocess_path, rootfs_path.join(exe_name)).expect("Failed to copy executable");
     std::fs::create_dir(rootfs_path.join("mnt")).expect("Failed to create /mnt directory");
-
-    let mut container = std::process::Command::new(rootfs_path.join(exe_name));
-    container
+    let output = std::process::Command::new(subprocess_path)
+        .arg(rootfs_path)
         .arg(fuse_path)
         .arg(fake_network_id)
-        .arg("/mnt/test.resolv.conf");
-
-    let output = container.expect_output();
+        .arg("/mnt/test.resolv.conf")
+        .expect_output();
     assert_eq!(
         output.stdout.to_string_lossy(),
         expected_content::MULTIPLE_DNS
