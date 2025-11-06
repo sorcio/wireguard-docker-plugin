@@ -47,4 +47,6 @@ jobs:
           key: ${{ matrix.target }}
       - run: cargo clippy --verbose --target ${{ matrix.target }}
       - run: cargo build --verbose --target ${{ matrix.target }}
+      # Some integration tests need to mess with user namespaces
+      - run: sudo sysctl --ignore --write kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo test --verbose --target ${{ matrix.target }}
