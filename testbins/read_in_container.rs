@@ -1,6 +1,9 @@
 //! This is invoked by tests/dnsfs.rs to test the magic resolv.conf file.
 
-use std::{io::Write, path::Path};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use container_helpers::ContainerOptions;
 use rtnetlink::{
@@ -12,6 +15,7 @@ use rtnetlink::{
 fn main() {
     // validate arguments first so we can fail early
     let Ok(AppArgs {
+        rootfs_path,
         mount_source,
         ifalias,
         path,
@@ -20,20 +24,14 @@ fn main() {
         usage();
     };
 
-    let process_exe = std::env::current_exe().expect("failed to get process executable path");
-    let root_path = process_exe
-        .parent()
-        .expect("failed to get root path")
-        .to_owned();
-
     let container_options = ContainerOptions::new()
         .user_ns()
         .mount_ns()
         .net_ns()
         .pid_ns()
-        .chroot(root_path.clone())
+        .chroot(PathBuf::from(&rootfs_path))
         .map_user_to_root()
-        .setup_fn(|| container_setup(&root_path, &mount_source));
+        .setup_fn(|| container_setup(rootfs_path.as_ref(), &mount_source));
     if let Err(err) = unsafe { container_options.enter_and_fork() } {
         panic!("failed to enter container: {err}");
     };
@@ -49,6 +47,7 @@ fn main() {
 struct AppArgsError;
 
 struct AppArgs {
+    rootfs_path: String,
     mount_source: String,
     ifalias: String,
     path: String,
@@ -57,10 +56,12 @@ struct AppArgs {
 impl AppArgs {
     fn from_env() -> Result<Self, AppArgsError> {
         let mut args = std::env::args().skip(1);
+        let rootfs_path = args.next().ok_or(AppArgsError)?;
         let mount_source = args.next().ok_or(AppArgsError)?;
         let ifalias = args.next().ok_or(AppArgsError)?;
         let path = args.next().ok_or(AppArgsError)?;
         Ok(Self {
+            rootfs_path,
             mount_source,
             ifalias,
             path,
