@@ -1,11 +1,16 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    sync::{Arc, Mutex},
+};
 
 use futures_util::stream::StreamExt;
+use futures_util::TryStreamExt;
 use rtnetlink::{
     new_connection,
     packet_core::NetlinkMessage,
     packet_route::{
         link::{LinkAttribute, LinkMessage},
+        route::{RouteAttribute, RouteMessage},
         RouteNetlinkMessage,
     },
     LinkWireguard,
@@ -18,6 +23,11 @@ use wireguard_uapi::WgSocket;
 use crate::{types::EndpointId, wg::Wg};
 
 use super::{Config, WgError};
+
+/// Overhead for WireGuard packets, in bytes, over IPv4
+const WG_MTU_OVERHEAD_IPV4: u32 = 60;
+/// Overhead for WireGuard packets, in bytes, over IPv6 or mixed IPv4/IPv6
+const WG_MTU_OVERHEAD_IPV6: u32 = 80;
 
 #[derive(Debug, Error)]
 pub(super) enum Error {
@@ -68,8 +78,8 @@ impl Wg for WgLinux {
             .await
             .map_err(Error::from)?;
 
-        let mtu = config.mtu;
         {
+            let config = config.clone();
             let wg_socket = self.wg_socket.clone();
             let if_name = if_name.clone();
             tokio::task::spawn_blocking(move || {
@@ -81,10 +91,14 @@ impl Wg for WgLinux {
             .map_err(Error::from)?
             .map_err(Error::from)?;
         }
-        if let Some(mtu) = mtu {
+        if let Some(mtu) = config.mtu {
+            // If config specifies explicit MTU, we apply it directly
             set_mtu(self.rt.clone(), &if_name, mtu)
                 .await
                 .map_err(Error::from)?;
+        } else {
+            // If no explicit MTU is specified, we need to discover it
+            discover_and_apply_mtu(self.rt.clone(), &if_name, &config).await;
         }
         set_ifalias(self.rt.clone(), &if_name, ifalias)
             .await
@@ -326,4 +340,129 @@ fn get_name_from_link(link: &LinkMessage) -> Option<&String> {
             None
         }
     })
+}
+
+/// Query kernel for minimum route MTU to a specific destination
+async fn query_route_mtu(
+    handle: &rtnetlink::Handle,
+    ip: std::net::IpAddr,
+    prefix_len: u8,
+) -> Option<u32> {
+    let message = rtnetlink::RouteMessageBuilder::<std::net::IpAddr>::new()
+        .destination_prefix(ip, prefix_len)
+        .ok()?
+        .build();
+
+    let routes: Vec<RouteMessage> = handle
+        .route()
+        .get(message)
+        .execute()
+        .try_collect()
+        .await
+        .inspect_err(|e| log::debug!("Route query for {} failed: {}", ip, e))
+        .ok()?;
+
+    let mut min_mtu: Option<u32> = None;
+    for route in &routes {
+        if let Some(mtu) = get_route_mtu(handle, route).await {
+            min_mtu = Some(min_mtu.map_or(mtu, |current| current.min(mtu)));
+        }
+    }
+    min_mtu
+}
+
+async fn discover_and_apply_mtu(handle: rtnetlink::Handle, if_name: &str, config: &Config) {
+    let endpoint_ips: Vec<IpAddr> = config
+        .peers
+        .iter()
+        .filter_map(|peer| peer.endpoint.map(|ep| ep.ip()))
+        .collect();
+    let has_ipv6 = endpoint_ips.iter().any(IpAddr::is_ipv6);
+
+    let overhead = if has_ipv6 {
+        WG_MTU_OVERHEAD_IPV6
+    } else {
+        WG_MTU_OVERHEAD_IPV4
+    };
+
+    let mut best_mtu: Option<u32> = None;
+    for ip in &endpoint_ips {
+        let prefix_len = if ip.is_ipv4() {
+            Ipv4Addr::BITS
+        } else {
+            Ipv6Addr::BITS
+        } as u8;
+
+        if let Some(mtu) = query_route_mtu(&handle, *ip, prefix_len).await {
+            best_mtu = Some(best_mtu.map_or(mtu, |current| current.min(mtu)));
+        }
+    }
+
+    // If no routes found, fall back to default routes
+    if best_mtu.is_none() {
+        for default_ip in [
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        ] {
+            if let Some(mtu) = query_route_mtu(&handle, default_ip, 0).await {
+                best_mtu = Some(best_mtu.map_or(mtu, |current| current.min(mtu)));
+            }
+        }
+    }
+    let base_mtu = best_mtu.unwrap_or(1500);
+    let final_mtu = base_mtu.saturating_sub(overhead);
+    if let Err(err) = set_mtu(handle, if_name, final_mtu).await {
+        log::warn!(
+            interface = if_name,
+            mtu = final_mtu,
+            error:? = err;
+            "Failed to set auto-discovered MTU"
+        );
+    } else {
+        log::debug!(
+            interface = if_name,
+            base_mtu = base_mtu,
+            overhead = overhead,
+            applied_mtu = final_mtu;
+            "Applied auto-discovered MTU"
+        );
+    }
+}
+
+/// Extract MTU from a route, preferring route-specific MTU over interface MTU
+async fn get_route_mtu(handle: &rtnetlink::Handle, route: &RouteMessage) -> Option<u32> {
+    use rtnetlink::packet_route::route::RouteMetric;
+
+    // First check for route-specific MTU in RTA_METRICS/RTAX_MTU
+    for attr in &route.attributes {
+        if let RouteAttribute::Metrics(metrics) = attr {
+            for metric in metrics {
+                if let RouteMetric::Mtu(mtu) = metric {
+                    return Some(*mtu);
+                }
+            }
+        }
+    }
+
+    // Fall back to output interface MTU
+    let oif = route.attributes.iter().find_map(|attr| match attr {
+        RouteAttribute::Oif(idx) => Some(*idx),
+        _ => None,
+    })?;
+
+    get_link_mtu(handle, oif).await
+}
+
+/// Get MTU of a network interface by index
+async fn get_link_mtu(handle: &rtnetlink::Handle, ifindex: u32) -> Option<u32> {
+    let mut stream = handle.link().get().execute();
+    while let Ok(Some(link)) = stream.try_next().await {
+        if link.header.index == ifindex {
+            return link.attributes.iter().find_map(|attr| match attr {
+                LinkAttribute::Mtu(mtu) => Some(*mtu),
+                _ => None,
+            });
+        }
+    }
+    None
 }
