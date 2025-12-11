@@ -29,12 +29,22 @@ directory. This directory should contain a number of WireGuard configuration
 files. Each file should have a `.conf` extension. The name will be used as
 an identifier, and will need to be specified when creating a network.
 
-The configuration file should contain the WireGuard configuration in the
-format specified by the [`wg` tool](https://git.zx2c4.com/wireguard-tools/about/src/man/wg.8),
-with some additions: the `Interface` section can optionally include an `Address`
-line with at most one IPv4 address, and at most one IPv6 address, optionally
-followed by a CIDR mask. It can also include a `DNS` line with one or more
-DNS servers (comma or space-separated).
+The configuration file should contain the WireGuard configuration in the format
+specified by the [`wg`
+tool](https://git.zx2c4.com/wireguard-tools/about/src/man/wg.8), with some
+additions, compatibly with
+[`wg-quick`](https://www.man7.org/linux/man-pages/man8/wg-quick.8.html):
+
+- the `Interface` section can optionally include an `Address` line with at most
+  one IPv4 address, and at most one IPv6 address, optionally followed by a CIDR
+  mask;
+
+- it can also include a `DNS` line with one or more DNS servers (comma or
+  space-separated);
+
+- and an optional `MTU` line to set the interface MTU; if omitted, the MTU will
+  be automatically discovered based on the underlying network (similar to
+  `wg-quick` behavior).
 
 Here is an example configuration file:
 
@@ -44,6 +54,7 @@ PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
 ListenPort = 51820
 Address = 10.192.124.1/24
 DNS = 10.192.124.1, 10.192.124.2
+MTU = 1420
 
 [Peer]
 PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
@@ -166,10 +177,6 @@ Here are some limitations:
   with Kubernetes. It *might* work if the plugin is installed on all nodes,
   and the configuration files are synchronized. Open an issue if you are
   interested in this use case.
-
-- The `MTU` option from `wg-quick` configuration files is not supported, but
-  will eventually be. There is no way to set the MTU for the interface
-  at the moment.
 
 - The plugin is only for Linux.
 
